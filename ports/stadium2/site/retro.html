@@ -75,11 +75,16 @@
                font: bold 14px "Courier New", monospace; border: 3px inset #777; margin: 0 0 6px; user-select: text; }
   #n64-code { text-transform: uppercase; font-size: 16px; letter-spacing: 4px; margin: 0; }
   #n64 [hidden] { display: none !important; }
+  #n64-reloading { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+                   padding: 24px; box-sizing: border-box; background: #000d; color: #ff0; text-align: center;
+                   font: bold 20px/1.5 "Comic Sans MS", "Comic Sans", cursive; text-shadow: 2px 2px 0 #c00; }
+  #n64-net .dim { color: #9ff; }
   .n64-rtitle { color: #ccc; font-size: 12px; }
   .n64-rcode { font: bold 30px "Courier New", monospace; letter-spacing: 8px; color: #0f0; text-align: center; margin: 2px 0 4px; }
   .n64-rlines { font-size: 12px; line-height: 1.5; }
   .n64-rlines b { color: #ff0; }
   .n64-rlines .err { color: #f88; }
+  .n64-rlines .dim { color: #9ff; }
   .n64-row { display: flex; gap: 6px; align-items: stretch; margin-top: 6px; }
   .n64-row > * { flex: 1; margin: 0; }
   .n64-note { margin-top: 6px; font-size: 11px; color: #ccc; }
@@ -238,12 +243,14 @@
           controls: 'CONTROLES', trigger: 'gatilho', space: 'Espaço', dpad: 'Direcional', stick: 'Analógico',
           options: 'OPÇÕES', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
           online: 'MODO ONLINE', new: 'NOVO!', create: 'CRIAR SALA', join: 'ENTRAR', code: 'CÓDIGO', name: 'SEU NOME',
+          reloadroom: 'O jogo vai reiniciar pra entrar na sala. Aguarde...', reloadleave: 'Saindo da sala. O jogo vai reiniciar...',
           onlinenote: 'Batalha de 2 jogadores pela internet. Quem cria a sala é o jogador 1 e passa o código pro amigo. O jogo começa do zero nos dois.',
           rom: 'Traga sua própria ROM. Nenhum arquivo do jogo fica neste site.' },
     en: { panel: 'PANEL',
           controls: 'CONTROLS', trigger: 'trigger', space: 'Space', dpad: 'D-Pad', stick: 'Stick',
           options: 'OPTIONS', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
           online: 'ONLINE MODE', new: 'NEW!', create: 'CREATE ROOM', join: 'JOIN', code: 'CODE', name: 'YOUR NAME',
+          reloadroom: 'The game restarts to enter the room. Please wait...', reloadleave: 'Leaving the room. The game restarts...',
           onlinenote: '2 player battles over the internet. Whoever creates the room is player 1 and gives the code to a friend. The game starts over on both.',
           rom: 'Bring your own ROM. No game files are hosted on this site.' },
   }[n64Lang];
@@ -290,11 +297,17 @@
   // The player's name, shown to the other player in a room; kept in this browser.
   function n64Name(value) { try { localStorage.setItem('n64web-name', String(value).trim().slice(0, 12)); } catch (e) {} }
   (function () { try { document.getElementById('n64-name').value = localStorage.getItem('n64web-name') || ''; } catch (e) {} })();
+  // Entering or leaving a room starts the game over (both games must run from their boot together): say so first.
+  function n64Reload(href, text) {
+    const d = document.createElement('div'); d.id = 'n64-reloading'; d.textContent = text;
+    document.body.appendChild(d);
+    setTimeout(() => { location.href = href; }, 700);
+  }
   function n64Online(code) {
     code = String(code || '').trim().toUpperCase();
     if (code !== 'NEW' && !/^[A-Z0-9]{4}$/.test(code)) { document.getElementById('n64-code').focus(); return; }
     const u = new URL(location.href); u.searchParams.set('online', code === 'NEW' ? 'new' : code);
-    location.href = u.pathname + u.search;
+    n64Reload(u.pathname + u.search, n64Text.reloadroom);
   }
   (function () {
     const q = new URLSearchParams(location.search);
@@ -316,6 +329,7 @@
       kicked: 'O dono te removeu da sala. O jogo segue só com você.', kickedother: (n) => `${n} foi removido da sala. O jogo segue só com você.`,
       ownerleft: 'O dono saiu da sala. O jogo segue só com você.',
       againnote: 'Pra jogar com outra pessoa, clique em NOVA PARTIDA: o jogo recomeça e a sala reabre com o mesmo código.',
+      loading: 'Carregando o jogo...',
     } : {
       server: 'Connecting to the room server...', noserver: 'Could not reach the room server. Try again in a moment.',
       created: 'Room created! Give the code to your friend: they type it in the panel and click JOIN.', you1: 'You are PLAYER 1.',
@@ -331,6 +345,7 @@
       kicked: 'The owner removed you from the room. The game goes on with you alone.', kickedother: (n) => `${n} was removed from the room. The game goes on with you alone.`,
       ownerleft: 'The owner left the room. The game goes on with you alone.',
       againnote: 'To play with someone else, click NEW MATCH: the game starts over and the room opens again with the same code.',
+      loading: 'Loading the game...',
     };
     const box = document.getElementById('n64-net');
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -338,14 +353,15 @@
     const draw = () => {
       box.className = 'on' + (live && !error ? ' small' : '');
       box.innerHTML = (head ? `<div class="big">${head}</div>` : '') + body +
+        (gameReady || error ? '' : `<div class="dim">${L.loading}</div>`) +
         `<div class="bar"><span>${foot}</span><button class="n64-b3" id="n64-net-leave">${L.leave}</button></div>`;
-      document.getElementById('n64-net-leave').onclick = () => { location.href = location.pathname; };
+      document.getElementById('n64-net-leave').onclick = () => n64Reload(location.pathname, n64Text.reloadleave);
     };
     const say = (text, isError) => { body = `<div class="${isError ? 'err' : ''}">${esc(text)}</div>`; if (isError) error = true; draw(); };
 
     // The panel's online box while in a room: the owner sees the code, who is in the room and can kick them; the one who
     // joined sees the room and its owner. Both can leave.
-    let myName = '', hostName = '', guestName = '', guestHere = false, ended = false, note = '';
+    let myName = '', hostName = '', guestName = '', guestHere = false, ended = false, note = '', gameReady = false;
     try { myName = localStorage.getItem('n64web-name') || ''; } catch (e) {}
     myName = myName || L.player;
     const $ = (id) => document.getElementById(id);
@@ -362,6 +378,7 @@
         if (hostName) lines.push(`${L.owner}: <b>${esc(hostName)}</b>`);
         lines.push(L.youare(2));
       }
+      if (!gameReady) lines.push(`<span class="dim">${L.loading}</span>`);
       if (live && rtt) lines.push(`${L.ping} ${Math.round(rtt)} ms`);
       if (note) lines.push(`<span class="err">${esc(note)}</span>`);
       $('n64-r-lines').innerHTML = lines.filter(Boolean).join('<br>');
@@ -373,13 +390,12 @@
     }
     window.addEventListener('DOMContentLoaded', () => {
       panel();
-      $('n64-r-leave').onclick = () => { location.href = location.pathname; };
+      $('n64-r-leave').onclick = () => n64Reload(location.pathname, n64Text.reloadleave);
       $('n64-r-kick').onclick = () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'kick' })); };
       // A new match: this page reloads (the game starts over) and makes the room again with the same code.
       $('n64-r-again').onclick = () => {
-        const next = location.pathname + '?online=new&room=' + code;
         if (ws) ws.close();
-        setTimeout(() => { location.href = next; }, 300);
+        n64Reload(location.pathname + '?online=new&room=' + code, n64Text.reloadroom);
       };
     });
 
@@ -397,6 +413,7 @@
     globalThis.n64webNet = {
       local(f, b, x, y) { const i = f % HIST; lf[i] = f; lb[i] = b; lx[i] = x; ly[i] = y; localMax = Math.max(localMax, f); sendInputs(); },
       hash(vi, hi, lo) { ownHash.set(vi, hi + ':' + lo); sendRaw(new Uint32Array([PKT_HASH, vi, hi, lo]).buffer); checkHashes(); },
+      started() { gameReady = true; draw(); panel(); },
     };
 
     function sendRaw(buf) {

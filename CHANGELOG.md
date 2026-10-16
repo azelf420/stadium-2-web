@@ -2,6 +2,13 @@
 
 What changed and how it was tested. Measurements come from headless Chrome on an Apple M1 unless said otherwise.
 
+## Online: player 2's controller
+- The game checks which controllers are plugged in once, at boot, and only then offers 2 player modes. In a room both
+  pages now report controller 2 from the boot on, so 2 player modes open (tested: Game Pak Check shows two
+  controllers and Event Battle, a 2 player arena, opens).
+- Entering or leaving a room says first that the game restarts, and the room box says "Loading the game..." until it
+  is ready.
+
 ## Rooms
 - Players have a name. In a room the panel shows the room code, who is in it and its owner; the owner can kick the
   other player, and both can leave. A match can't take a new player midway (both games run from boot in step), so

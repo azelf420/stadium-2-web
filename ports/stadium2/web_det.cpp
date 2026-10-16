@@ -133,13 +133,23 @@ bool take(const Slot& s, uint64_t f, LatchedInput& out) {
     return true;
 }
 
+// Whether the page is in a room: n64webNet is set up by the page before the game boots. Read once.
+bool requested() {
+    static std::atomic<int> cached{-1};
+    int v = cached.load();
+    if (v < 0) { v = MAIN_THREAD_EM_ASM_INT({ return globalThis.n64webNet ? 1 : 0; }); cached.store(v); }
+    return v == 1;
+}
+
 // True when this frame's inputs came from online play.
 bool latch(uint64_t vi) {
     if (!asked) {
         asked = true;
-        if (MAIN_THREAD_EM_ASM_INT({ return globalThis.n64webNet ? 1 : 0; })) {
+        if (requested()) {
             int off = 0;
             state.compare_exchange_strong(off, 1);
+            // The game has booted to its first frame: the page can say so.
+            MAIN_THREAD_ASYNC_EM_ASM({ if (globalThis.n64webNet && n64webNet.started) n64webNet.started(); });
         }
     }
     frame_now.store((uint32_t)vi, std::memory_order_relaxed);
@@ -179,6 +189,10 @@ bool latch(uint64_t vi) {
     return true;
 }
 }
+
+// Online, controller 2 is plugged in from the boot on, on both pages: the game asks which controllers exist once, at
+// boot, and only then offers its 2 player modes.
+extern "C" bool n64web_det_port_present(int port) { return port == 1 && net::requested(); }
 
 extern "C" EMSCRIPTEN_KEEPALIVE void n64web_net_begin(int local_port, int delay) {
     net::local_port = local_port == 1 ? 1 : 0;

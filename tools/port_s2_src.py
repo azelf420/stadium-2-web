@@ -460,3 +460,23 @@ static bool get_n64_input(int controller_num, uint16_t* buttons_out, float* x_ou
 
 static bool get_n64_input_live(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out) {'''),
 ], 'get_n64_input_live')
+
+# Online play: the game asks which controllers exist once, at boot (osContInit), and only then offers 2 player modes.
+# Both pages report controller 2 present from the boot on (ports/stadium2/web_det.cpp), so the two games agree.
+edit('src/main/main.cpp', [
+ ('''static ultramodern::input::connected_device_info_t get_connected_device_info(int controller_num) {''',
+  '''#ifdef N64WEB_DET
+extern "C" bool n64web_det_port_present(int port);
+#endif
+static ultramodern::input::connected_device_info_t get_connected_device_info(int controller_num) {'''),
+ ('''    // Port 0 always reports present (keyboard/pad/TCP all feed get_n64_input);
+    // ports 1-3 present only when a Transfer Pak cart is configured.
+    info.connected_device = (controller_num == 0 || has_transfer_pak)''',
+  '''    // Port 0 always reports present (keyboard/pad/TCP all feed get_n64_input);
+    // ports 1-3 present only when a Transfer Pak cart is configured.
+#ifdef N64WEB_DET
+    info.connected_device = (controller_num == 0 || has_transfer_pak || n64web_det_port_present(controller_num))
+#else
+    info.connected_device = (controller_num == 0 || has_transfer_pak)
+#endif'''),
+], 'n64web_det_port_present')
