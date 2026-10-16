@@ -480,3 +480,25 @@ static ultramodern::input::connected_device_info_t get_connected_device_info(int
     info.connected_device = (controller_num == 0 || has_transfer_pak)
 #endif'''),
 ], 'n64web_det_port_present')
+
+# Web: one copy of the ROM in the page's file system at most, and none once the runtime holds it (64 MB each, at the
+# moment the game starts: what a phone runs out of). The file picked in the game's dialog is moved, not copied, and
+# the file the ROM was selected from is deleted.
+edit('src/main/main.cpp', [
+ ('''            std::filesystem::copy_file(picked[0], saved, std::filesystem::copy_options::overwrite_existing, ec);
+            out = ec ? picked[0] : saved;''',
+  '''#ifdef __EMSCRIPTEN__
+            std::filesystem::rename(picked[0], saved, ec);
+#else
+            std::filesystem::copy_file(picked[0], saved, std::filesystem::copy_options::overwrite_existing, ec);
+#endif
+            out = ec ? picked[0] : saved;'''),
+ ('''                    std::fprintf(stderr, "[PSR] select_rom OK\\n"); std::fflush(stderr);
+                    if (!cli_override) write_rom_cfg(rom_path);''',
+  '''                    std::fprintf(stderr, "[PSR] select_rom OK\\n"); std::fflush(stderr);
+#ifdef __EMSCRIPTEN__
+                    { std::error_code rm_ec; std::filesystem::remove(rom_path, rm_ec); }
+#else
+                    if (!cli_override) write_rom_cfg(rom_path);
+#endif'''),
+], 'std::filesystem::rename(picked[0], saved, ec)')

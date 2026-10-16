@@ -1,5 +1,5 @@
 diff --git a/src/main/main.cpp b/src/main/main.cpp
-index 2a6075c..1ae6331 100644
+index 2a6075c..7d9665f 100644
 --- a/src/main/main.cpp
 +++ b/src/main/main.cpp
 @@ -88,6 +88,16 @@ std::filesystem::path exe_dir() {
@@ -235,7 +235,7 @@ index 2a6075c..1ae6331 100644
          true;
  #else
          std::getenv("PSR_AUTOBOOT") != nullptr;
-@@ -2852,6 +3000,27 @@ int main(int argc, char** argv) {
+@@ -2852,6 +3000,31 @@ int main(int argc, char** argv) {
              if (!GetOpenFileNameA(&ofn)) return false;
              out = picked;
              return true;
@@ -257,9 +257,25 @@ index 2a6075c..1ae6331 100644
 +            if (picked.empty()) return false;
 +            std::error_code ec;
 +            const auto saved = exe_dir / "baserom.z64";
++#ifdef __EMSCRIPTEN__
++            std::filesystem::rename(picked[0], saved, ec);
++#else
 +            std::filesystem::copy_file(picked[0], saved, std::filesystem::copy_options::overwrite_existing, ec);
++#endif
 +            out = ec ? picked[0] : saved;
 +            return true;
  #else
              std::fprintf(stderr, "[PSR] no file picker on this platform; pass ROM path on the command line.\n");
              return false;
+@@ -2892,7 +3065,11 @@ int main(int argc, char** argv) {
+                 auto err = recomp::select_rom(rom_path, game_id);
+                 if (err == recomp::RomValidationError::Good) {
+                     std::fprintf(stderr, "[PSR] select_rom OK\n"); std::fflush(stderr);
++#ifdef __EMSCRIPTEN__
++                    { std::error_code rm_ec; std::filesystem::remove(rom_path, rm_ec); }
++#else
+                     if (!cli_override) write_rom_cfg(rom_path);
++#endif
+                     break;
+                 }
+                 // Validation failed â€” describe to the user and re-pick.

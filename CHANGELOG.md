@@ -7,6 +7,8 @@ What changed and how it was tested. Measurements come from headless Chrome on an
   paid 1 GB of real memory for a console that has 8 MB. It is now taken from memory nobody has written, which the
   browser gives already zeroed and which costs nothing until used: memory in use went from 1147 MB to 123 MB at boot
   (161 MB in battle). The game runs byte for byte the same (454 of 454 checkpoints).
+- The ROM is no longer copied into the browser's storage by the runtime and read back when the game starts: two
+  64 MB copies fewer at that moment, the one where phones run out of memory.
 - GRAPHICS option in the panel: LIGHT (the N64's own resolution), NORMAL (twice) and HIGH (the screen's). It changes
   while playing. Phones, tablets and computers with little memory start on LIGHT.
 

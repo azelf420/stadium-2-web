@@ -611,7 +611,7 @@ index feaf220..b5ea080 100644
      // Bind every host runtime helper the CGenerator output can call. All are
      // CODE symbols (tcc_add_symbol resolves them); the lone DATA symbol,
 diff --git a/librecomp/src/recomp.cpp b/librecomp/src/recomp.cpp
-index 342dff4..3cb01d6 100644
+index 342dff4..7187215 100644
 --- a/librecomp/src/recomp.cpp
 +++ b/librecomp/src/recomp.cpp
 @@ -40,6 +40,22 @@
@@ -660,7 +660,60 @@ index 342dff4..3cb01d6 100644
  void recomp::mods::scan_mods() {
      std::vector<recomp::mods::ModOpenErrorDetails> mod_open_errors;
      {
-@@ -979,6 +1003,9 @@ void recomp::start(
+@@ -209,11 +233,26 @@ bool check_stored_rom(const recomp::GameEntry& game_entry) {
+ 
+ static std::unordered_set<std::u8string> valid_game_roms;
+ 
++#ifdef __EMSCRIPTEN__
++// On the web the selected ROM is held here until the game starts, instead of written to the config folder and read
++// back: there that folder is IndexedDB backed, so the copy cost 64 MB more in memory and in the browser's storage at
++// the moment the game starts. The page keeps the ROM itself between visits.
++static std::vector<uint8_t> s_web_selected_rom;
++#endif
++
+ bool recomp::is_rom_valid(std::u8string& game_id) {
+     return valid_game_roms.contains(game_id);
+ }
+ 
+ void recomp::check_all_stored_roms() {
++#ifdef __EMSCRIPTEN__
++    // Copies stored by earlier versions of the page: dropped (each was read in whole here to check it).
++    for (const auto& rom_entry : game_roms) {
++        std::error_code ec;
++        std::filesystem::remove(config_path / rom_entry.second.stored_filename(), ec);
++    }
++    return;
++#endif
+     // Any game whose cached ROM still passes the hash check is marked valid.
+     for (const auto& rom_entry : game_roms) {
+         if (check_stored_rom(rom_entry.second)) {
+@@ -223,6 +262,13 @@ void recomp::check_all_stored_roms() {
+ }
+ 
+ bool recomp::load_stored_rom(std::u8string& game_id) {
++#ifdef __EMSCRIPTEN__
++    if (!s_web_selected_rom.empty()) {
++        recomp::set_rom_contents(std::move(s_web_selected_rom));
++        s_web_selected_rom = {};
++        return true;
++    }
++#endif
+     auto find_it = game_roms.find(game_id);
+ 
+     if (find_it == game_roms.end()) {
+@@ -410,7 +456,11 @@ recomp::RomValidationError recomp::select_rom(const std::filesystem::path& rom_p
+         }
+     }
+ 
++#ifdef __EMSCRIPTEN__
++    s_web_selected_rom = std::move(rom_data);
++#else
+     write_file(config_path / game_entry.stored_filename(), rom_data);
++#endif
+     
+     return recomp::RomValidationError::Good;
+ }
+@@ -979,6 +1029,9 @@ void recomp::start(
              VirtualFree(rdram, 0, MEM_RELEASE);
          }
      }
@@ -670,7 +723,7 @@ index 342dff4..3cb01d6 100644
  #else
      rdram = (uint8_t*)mmap(NULL, allocation_size, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
      alloc_failed = rdram == reinterpret_cast<uint8_t*>(MAP_FAILED);
-@@ -1033,6 +1060,9 @@ void recomp::start(
+@@ -1033,6 +1086,9 @@ void recomp::start(
  #ifdef _WIN32
      // VirtualFree yields zero when it fails.
      free_failed = (VirtualFree(rdram, 0, MEM_RELEASE) == 0);
