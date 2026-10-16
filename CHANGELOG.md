@@ -2,6 +2,11 @@
 
 What changed and how it was tested. Measurements come from headless Chrome on an Apple M1 unless said otherwise.
 
+## Faster start
+- The ROM is kept in the browser after the first time (only the US ROM, checked by its SHA-256), whether it was
+  picked as a file or came from an address: later visits start without asking or downloading.
+- The page's game files are sent gzipped by the asset host: the WebAssembly goes from 51 MB to 12 MB on the wire.
+
 ## Online mode (2 players)
 - The page has an online mode: create a room, send the link, play. Each page runs the whole game from its own ROM and
   only the controller inputs travel (lockstep), WebRTC between the browsers, with the room server as a fallback.

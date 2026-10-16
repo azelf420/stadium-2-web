@@ -83,13 +83,10 @@
   body:not(.n64-panel) #n64-net { left: 50%; width: min(440px, calc(100vw - 24px)); }
   #n64-net.on { display: block; }
   #n64-net.small { padding: 3px 8px; font-size: 11px; opacity: .85; }
-  #n64-net.small .big, #n64-net.small .link { display: none; }
+  #n64-net.small .big { display: none; }
   #n64-net .big { font: bold 15px "Comic Sans MS", "Comic Sans", cursive; color: #ff0; margin-bottom: 4px; }
-  #n64-net .code { font: bold 24px "Courier New", monospace; letter-spacing: 6px; color: #0f0; }
-  #n64-net .link { display: flex; gap: 6px; margin-top: 6px; }
-  #n64-net .link input { flex: 1; min-width: 0; font: 12px "Courier New", monospace; color: #0ff; background: #000;
-                         border: 2px inset #777; padding: 3px; }
-  #n64-net .link button, #n64-net .bar button { margin: 0; width: auto; padding: 3px 10px; font-size: 12px; }
+  #n64-net .code { font: bold 32px "Courier New", monospace; letter-spacing: 8px; color: #0f0; }
+  #n64-net .bar button { margin: 0; width: auto; padding: 3px 10px; font-size: 12px; }
   #n64-net .bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; }
   #n64-net.small .bar { margin-top: 0; }
   #n64-net .err { color: #f88; }
@@ -98,8 +95,10 @@
 <!--/STYLE-->
 <!--PANEL-->
 <script>
-  // The ROM address given once (?rom=<url>) or saved earlier: the page downloads it here, with progress, and the game
-  // takes the bytes when it starts (main.cpp waits on n64webRomState).
+  // The ROM: kept in this browser (IndexedDB) after the first time, so the game starts at once on every later visit.
+  // The first time it comes from an address given once (?rom=<url>, saved) downloaded here with progress, or from the
+  // file the player picks when the game asks. Only the US ROM (by its SHA-256) is kept. The game takes the bytes when
+  // it starts (main.cpp waits on n64webRomState: 'loading', then 'done' with n64webRom, or anything else to ask).
   (function () {
     let url = '';
     try {
@@ -111,23 +110,27 @@
       }
       url = q || localStorage.getItem('n64web-rom') || '';
     } catch (e) {}
-    if (!url || !window.crossOriginIsolated || !navigator.gpu) return;
+    if (!window.crossOriginIsolated || !navigator.gpu || !window.indexedDB && !url) return;
     const pt = /^pt/i.test(navigator.language || '');
+    const ROM_SIZE = 64 << 20, ROM_SHA256 = '8160abe7d4b9734317000c44e9f882efefe4cc6359eacded98be62f2811e40a9';
     // The status line also carries the page's errors (red): never write over one.
     const say = (text) => { const st = document.getElementById('status'); if (st && !st.style.color) st.textContent = text; };
-    globalThis.n64webRomState = 'loading';
-    fetch(url).then(async (r) => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      const total = +r.headers.get('content-length') || 0, reader = r.body.getReader(), parts = [];
-      let got = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        parts.push(value); got += value.length;
-        if (total) say((pt ? 'Baixando a ROM ' : 'Downloading the ROM ') + Math.floor(got * 100 / total) + '%');
-      }
-      const rom = new Uint8Array(got); let at = 0;
-      for (const part of parts) { rom.set(part, at); at += part.length; }
+    const store = () => new Promise((res, rej) => {
+      const r = indexedDB.open('n64web', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('rom');
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+    const load = () => store().then((db) => new Promise((res) => {
+      const g = db.transaction('rom').objectStore('rom').get('us'); g.onsuccess = () => res(g.result); g.onerror = () => res(null);
+    })).catch(() => null);
+    const keep = async (bytes) => {
+      if (bytes.byteLength !== ROM_SIZE) return;
+      const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      if (hash !== ROM_SHA256) return;
+      const db = await store();
+      db.transaction('rom', 'readwrite').objectStore('rom').put(bytes, 'us');
+    };
+    const start = (rom) => {
       globalThis.n64webRom = rom; globalThis.n64webRomState = 'done';
       say(pt ? 'ROM pronta. Iniciando o jogo...' : 'ROM ready. Starting the game...');
       // The game clears the status line once it runs. Still there after 90 s: it most likely ran out of memory.
@@ -140,11 +143,50 @@
             : 'The game did not start. This device most likely ran out of memory (the game uses about 1.5 GB). It runs on a computer with Chrome or Edge.';
         }
       }, 90000);
+    };
+    // A ROM picked in the game's file dialog is kept too: the dialog's file input is made by the game, off the page.
+    const make = document.createElement.bind(document);
+    document.createElement = function (tag, options) {
+      const el = make(tag, options);
+      if (String(tag).toLowerCase() === 'input') {
+        el.addEventListener('change', () => { const f = el.files && el.files[0]; if (f) f.arrayBuffer().then(keep).catch(() => {}); });
+      }
+      return el;
+    };
+    globalThis.n64webRomState = 'loading';
+    load().then(async (saved) => {
+      if (saved && saved.byteLength === ROM_SIZE) { console.log('[n64web] ROM from this browser'); start(new Uint8Array(saved)); return; }
+      if (!url) { globalThis.n64webRomState = ''; return; }
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // Sent gzipped, its length header is the packed size: the progress is over the ROM's own 64 MB.
+      const reader = r.body.getReader(), parts = [];
+      let got = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value); got += value.length;
+        say((pt ? 'Baixando a ROM ' : 'Downloading the ROM ') + Math.min(99, Math.floor(got * 100 / ROM_SIZE)) + '%');
+      }
+      const rom = new Uint8Array(got); let at = 0;
+      for (const part of parts) { rom.set(part, at); at += part.length; }
+      start(rom);
+      keep(rom.buffer).catch(() => {});
     }).catch((e) => { console.log('[n64web] ROM download failed: ' + e); globalThis.n64webRomState = 'error'; });
   })();
 </script>
 <button id="n64-open" class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Panel(true)">&#9776; <span data-t="panel"></span></button>
 <div id="n64">
+
+  <fieldset><legend>&#9673; <span data-t="online"></span> <span class="n64-new" data-t="new"></span></legend>
+    <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online('new')">&#9733; <span data-t="create"></span></button>
+    <div class="n64-row">
+      <input id="n64-code" maxlength="4" autocomplete="off" spellcheck="false" data-p="code"
+             onkeydown="event.stopPropagation(); if (event.key === 'Enter') n64Online(this.value)" onkeyup="event.stopPropagation()">
+      <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online(document.getElementById('n64-code').value)" data-t="join"></button>
+    </div>
+    <div class="n64-note" data-t="onlinenote"></div>
+  </fieldset>
 
   <fieldset><legend>&#9733; <span data-t="controls"></span> &#9733;</legend>
     <table>
@@ -168,15 +210,6 @@
 
   <div class="n64-count"><span data-t="visits1"></span> <span id="n64-visits">000000</span> <span data-t="visits2"></span></div>
 
-  <fieldset><legend>&#9673; <span data-t="online"></span> <span class="n64-new" data-t="new"></span></legend>
-    <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online('new')">&#9733; <span data-t="create"></span></button>
-    <div class="n64-row">
-      <input id="n64-code" maxlength="4" autocomplete="off" spellcheck="false" data-p="code"
-             onkeydown="event.stopPropagation(); if (event.key === 'Enter') n64Online(this.value)" onkeyup="event.stopPropagation()">
-      <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online(document.getElementById('n64-code').value)" data-t="join"></button>
-    </div>
-    <div class="n64-note" data-t="onlinenote"></div>
-  </fieldset>
   <div class="foot"><span data-t="rom"></span></div>
 </div>
 <script>
@@ -187,13 +220,13 @@
           controls: 'CONTROLES', trigger: 'gatilho', space: 'Espaço', dpad: 'Direcional', stick: 'Analógico',
           options: 'OPÇÕES', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
           online: 'MODO ONLINE', new: 'NOVO!', create: 'CRIAR SALA', join: 'ENTRAR', code: 'CÓDIGO',
-          onlinenote: 'Batalha de 2 jogadores pela internet. Quem cria a sala é o jogador 1 e manda o link pro amigo. O jogo começa do zero nos dois.',
+          onlinenote: 'Batalha de 2 jogadores pela internet. Quem cria a sala é o jogador 1 e passa o código pro amigo. O jogo começa do zero nos dois.',
           rom: 'Traga sua própria ROM. Nenhum arquivo do jogo fica neste site.' },
     en: { panel: 'PANEL',
           controls: 'CONTROLS', trigger: 'trigger', space: 'Space', dpad: 'D-Pad', stick: 'Stick',
           options: 'OPTIONS', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
           online: 'ONLINE MODE', new: 'NEW!', create: 'CREATE ROOM', join: 'JOIN', code: 'CODE',
-          onlinenote: '2 player battles over the internet. Whoever creates the room is player 1 and sends the link to a friend. The game starts over on both.',
+          onlinenote: '2 player battles over the internet. Whoever creates the room is player 1 and gives the code to a friend. The game starts over on both.',
           rom: 'Bring your own ROM. No game files are hosted on this site.' },
   }[n64Lang];
   document.documentElement.lang = n64Lang === 'pt' ? 'pt-BR' : 'en';
@@ -249,7 +282,7 @@
     const pt = n64Lang === 'pt';
     const L = pt ? {
       server: 'Conectando ao servidor de salas...', noserver: 'Não consegui falar com o servidor de salas. Tenta de novo daqui a pouco.',
-      created: 'Sala criada! Manda este link pro teu amigo:', copy: 'COPIAR', copied: 'COPIADO!', you1: 'Você é o JOGADOR 1.',
+      created: 'Sala criada! Passe o código pro seu amigo: ele digita no painel e clica em ENTRAR.', you1: 'Você é o JOGADOR 1.',
       joining: 'Entrando na sala...', noroom: 'Essa sala não existe (ou o jogador 1 saiu). Confere o código.', full: 'Essa sala já tem 2 jogadores.',
       peer: 'Amigo chegou! Conectando...', relay: 'Conexão direta não deu; indo pelo servidor (um pouco mais lento).',
       live: (p, d) => `Online! Você é o JOGADOR ${p}.`, waitgame: 'Esperando o jogo carregar...',
@@ -257,7 +290,7 @@
       leave: 'SAIR DO ONLINE', ping: 'ping', nogame: 'Esta versão da página não tem o modo online.', room: 'SALA',
     } : {
       server: 'Connecting to the room server...', noserver: 'Could not reach the room server. Try again in a moment.',
-      created: 'Room created! Send this link to a friend:', copy: 'COPY', copied: 'COPIED!', you1: 'You are PLAYER 1.',
+      created: 'Room created! Give the code to your friend: they type it in the panel and click JOIN.', you1: 'You are PLAYER 1.',
       joining: 'Joining the room...', noroom: 'This room does not exist (or player 1 left). Check the code.', full: 'This room already has 2 players.',
       peer: 'Your friend is here! Connecting...', relay: 'No direct connection; going through the server (a bit slower).',
       live: (p, d) => `Online! You are PLAYER ${p}.`, waitgame: 'Waiting for the game to load...',
@@ -272,8 +305,6 @@
       box.innerHTML = (head ? `<div class="big">${head}</div>` : '') + body +
         `<div class="bar"><span>${foot}</span><button class="n64-b3" id="n64-net-leave">${L.leave}</button></div>`;
       document.getElementById('n64-net-leave').onclick = () => { location.href = location.pathname; };
-      const c = document.getElementById('n64-net-copy');
-      if (c) c.onclick = () => { navigator.clipboard.writeText(document.getElementById('n64-net-url').value).then(() => { c.textContent = L.copied; }); };
     };
     const say = (text, isError) => { body = `<div class="${isError ? 'err' : ''}">${esc(text)}</div>`; if (isError) error = true; draw(); };
 
@@ -355,9 +386,8 @@
         const m = JSON.parse(e.data);
         if (m.t === 'created') {
           code = m.code;
-          const link = location.origin + location.pathname + '?online=' + code;
           head = `${L.room} <span class="code">${code}</span>`; foot = L.you1;
-          body = `<div>${L.created}</div><div class="link"><input id="n64-net-url" readonly value="${esc(link)}"><button class="n64-b3" id="n64-net-copy">${L.copy}</button></div>`;
+          body = `<div>${L.created}</div>`;
           draw();
         } else if (m.t === 'joined') { code = m.code; head = `${L.room} <span class="code">${code}</span>`; say(L.peer); peerUp(); }
         else if (m.t === 'peer-joined') { say(L.peer); peerUp(); }
