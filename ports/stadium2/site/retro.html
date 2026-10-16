@@ -71,9 +71,15 @@
   body.n64-touch #n64-open { left: 50%; transform: translateX(-50%); top: 6px; }
 
   /* Online: the room form in the panel and the status box over the game. */
-  #n64-code { width: 100%; box-sizing: border-box; padding: 5px 4px; text-align: center; text-transform: uppercase;
-              font: bold 16px "Courier New", monospace; letter-spacing: 4px; color: #ff0; background: #000;
-              border: 3px inset #777; }
+  .n64-field { width: 100%; box-sizing: border-box; padding: 5px 4px; text-align: center; color: #ff0; background: #000;
+               font: bold 14px "Courier New", monospace; border: 3px inset #777; margin: 0 0 6px; user-select: text; }
+  #n64-code { text-transform: uppercase; font-size: 16px; letter-spacing: 4px; margin: 0; }
+  #n64 [hidden] { display: none !important; }
+  .n64-rtitle { color: #ccc; font-size: 12px; }
+  .n64-rcode { font: bold 30px "Courier New", monospace; letter-spacing: 8px; color: #0f0; text-align: center; margin: 2px 0 4px; }
+  .n64-rlines { font-size: 12px; line-height: 1.5; }
+  .n64-rlines b { color: #ff0; }
+  .n64-rlines .err { color: #f88; }
   .n64-row { display: flex; gap: 6px; align-items: stretch; margin-top: 6px; }
   .n64-row > * { flex: 1; margin: 0; }
   .n64-note { margin-top: 6px; font-size: 11px; color: #ccc; }
@@ -179,13 +185,25 @@
 <div id="n64">
 
   <fieldset><legend>&#9673; <span data-t="online"></span> <span class="n64-new" data-t="new"></span></legend>
-    <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online('new')">&#9733; <span data-t="create"></span></button>
-    <div class="n64-row">
-      <input id="n64-code" maxlength="4" autocomplete="off" spellcheck="false" data-p="code"
-             onkeydown="event.stopPropagation(); if (event.key === 'Enter') n64Online(this.value)" onkeyup="event.stopPropagation()">
-      <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online(document.getElementById('n64-code').value)" data-t="join"></button>
+    <div id="n64-online-idle">
+      <input id="n64-name" class="n64-field" maxlength="12" autocomplete="off" spellcheck="false" data-p="name"
+             onkeydown="event.stopPropagation()" onkeyup="event.stopPropagation()" oninput="n64Name(this.value)">
+      <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online('new')">&#9733; <span data-t="create"></span></button>
+      <div class="n64-row">
+        <input id="n64-code" class="n64-field" maxlength="4" autocomplete="off" spellcheck="false" data-p="code"
+               onkeydown="event.stopPropagation(); if (event.key === 'Enter') n64Online(this.value)" onkeyup="event.stopPropagation()">
+        <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online(document.getElementById('n64-code').value)" data-t="join"></button>
+      </div>
+      <div class="n64-note" data-t="onlinenote"></div>
     </div>
-    <div class="n64-note" data-t="onlinenote"></div>
+    <div id="n64-online-room" hidden>
+      <div id="n64-r-title" class="n64-rtitle"></div>
+      <div id="n64-r-code" class="n64-rcode"></div>
+      <div id="n64-r-lines" class="n64-rlines"></div>
+      <button id="n64-r-kick" class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" hidden></button>
+      <button id="n64-r-again" class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" hidden></button>
+      <button id="n64-r-leave" class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()"></button>
+    </div>
   </fieldset>
 
   <fieldset><legend>&#9733; <span data-t="controls"></span> &#9733;</legend>
@@ -219,13 +237,13 @@
     pt: { panel: 'PAINEL',
           controls: 'CONTROLES', trigger: 'gatilho', space: 'Espaço', dpad: 'Direcional', stick: 'Analógico',
           options: 'OPÇÕES', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
-          online: 'MODO ONLINE', new: 'NOVO!', create: 'CRIAR SALA', join: 'ENTRAR', code: 'CÓDIGO',
+          online: 'MODO ONLINE', new: 'NOVO!', create: 'CRIAR SALA', join: 'ENTRAR', code: 'CÓDIGO', name: 'SEU NOME',
           onlinenote: 'Batalha de 2 jogadores pela internet. Quem cria a sala é o jogador 1 e passa o código pro amigo. O jogo começa do zero nos dois.',
           rom: 'Traga sua própria ROM. Nenhum arquivo do jogo fica neste site.' },
     en: { panel: 'PANEL',
           controls: 'CONTROLS', trigger: 'trigger', space: 'Space', dpad: 'D-Pad', stick: 'Stick',
           options: 'OPTIONS', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
-          online: 'ONLINE MODE', new: 'NEW!', create: 'CREATE ROOM', join: 'JOIN', code: 'CODE',
+          online: 'ONLINE MODE', new: 'NEW!', create: 'CREATE ROOM', join: 'JOIN', code: 'CODE', name: 'YOUR NAME',
           onlinenote: '2 player battles over the internet. Whoever creates the room is player 1 and gives the code to a friend. The game starts over on both.',
           rom: 'Bring your own ROM. No game files are hosted on this site.' },
   }[n64Lang];
@@ -269,6 +287,9 @@
   // (n64webNet.local) and a hash of the game every second (n64webNet.hash), and takes the partner's inputs
   // (Module._n64web_net_remote). A room server pairs the pages by a 4 letter code and passes their WebRTC setup along
   // (server/rooms.py), and carries the game packets itself when the browsers can't connect directly.
+  // The player's name, shown to the other player in a room; kept in this browser.
+  function n64Name(value) { try { localStorage.setItem('n64web-name', String(value).trim().slice(0, 12)); } catch (e) {} }
+  (function () { try { document.getElementById('n64-name').value = localStorage.getItem('n64web-name') || ''; } catch (e) {} })();
   function n64Online(code) {
     code = String(code || '').trim().toUpperCase();
     if (code !== 'NEW' && !/^[A-Z0-9]{4}$/.test(code)) { document.getElementById('n64-code').focus(); return; }
@@ -288,6 +309,13 @@
       live: (p, d) => `Online! Você é o JOGADOR ${p}.`, waitgame: 'Esperando o jogo carregar...',
       left: 'O outro jogador saiu. O jogo segue só com você.', desync: (f) => `Os dois jogos se separaram (frame ${f}). Criem uma sala nova pra jogar de novo.`,
       leave: 'SAIR DO ONLINE', ping: 'ping', nogame: 'Esta versão da página não tem o modo online.', room: 'SALA',
+      ingame: 'Essa sala já está numa partida. Peça pro dono clicar em NOVA PARTIDA.', player: 'Jogador',
+      yourroom: 'SUA SALA', inroom: 'Você entrou na sala', owner: 'Dono', youare: (p) => `Você é o JOGADOR ${p}`,
+      nobody: 'Ninguém na sala ainda. Esperando...', here: (n) => `Na sala: <b>${n}</b> (JOGADOR 2)`,
+      kick: (n) => `EXPULSAR ${n}`, again: 'NOVA PARTIDA', leaveroom: 'SAIR DA SALA',
+      kicked: 'O dono te removeu da sala. O jogo segue só com você.', kickedother: (n) => `${n} foi removido da sala. O jogo segue só com você.`,
+      ownerleft: 'O dono saiu da sala. O jogo segue só com você.',
+      againnote: 'Pra jogar com outra pessoa, clique em NOVA PARTIDA: o jogo recomeça e a sala reabre com o mesmo código.',
     } : {
       server: 'Connecting to the room server...', noserver: 'Could not reach the room server. Try again in a moment.',
       created: 'Room created! Give the code to your friend: they type it in the panel and click JOIN.', you1: 'You are PLAYER 1.',
@@ -296,6 +324,13 @@
       live: (p, d) => `Online! You are PLAYER ${p}.`, waitgame: 'Waiting for the game to load...',
       left: 'The other player left. The game goes on with you alone.', desync: (f) => `The two games went apart (frame ${f}). Create a new room to play again.`,
       leave: 'LEAVE ONLINE', ping: 'ping', nogame: 'This version of the page has no online mode.', room: 'ROOM',
+      ingame: 'This room is in a match already. Ask the owner to click NEW MATCH.', player: 'Player',
+      yourroom: 'YOUR ROOM', inroom: 'You joined room', owner: 'Owner', youare: (p) => `You are PLAYER ${p}`,
+      nobody: 'Nobody in the room yet. Waiting...', here: (n) => `In the room: <b>${n}</b> (PLAYER 2)`,
+      kick: (n) => `KICK ${n}`, again: 'NEW MATCH', leaveroom: 'LEAVE ROOM',
+      kicked: 'The owner removed you from the room. The game goes on with you alone.', kickedother: (n) => `${n} was removed from the room. The game goes on with you alone.`,
+      ownerleft: 'The owner left the room. The game goes on with you alone.',
+      againnote: 'To play with someone else, click NEW MATCH: the game starts over and the room opens again with the same code.',
     };
     const box = document.getElementById('n64-net');
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -307,6 +342,46 @@
       document.getElementById('n64-net-leave').onclick = () => { location.href = location.pathname; };
     };
     const say = (text, isError) => { body = `<div class="${isError ? 'err' : ''}">${esc(text)}</div>`; if (isError) error = true; draw(); };
+
+    // The panel's online box while in a room: the owner sees the code, who is in the room and can kick them; the one who
+    // joined sees the room and its owner. Both can leave.
+    let myName = '', hostName = '', guestName = '', guestHere = false, ended = false, note = '';
+    try { myName = localStorage.getItem('n64web-name') || ''; } catch (e) {}
+    myName = myName || L.player;
+    const $ = (id) => document.getElementById(id);
+    function panel() {
+      if (!$('n64-online-room')) return;
+      $('n64-online-idle').hidden = true; $('n64-online-room').hidden = false;
+      $('n64-r-title').textContent = isHost ? L.yourroom : L.inroom;
+      $('n64-r-code').textContent = code || '····';
+      const lines = [];
+      if (isHost) {
+        lines.push(L.youare(1));
+        lines.push(guestHere ? L.here(esc(guestName || L.player)) : (ended ? '' : L.nobody));
+      } else {
+        if (hostName) lines.push(`${L.owner}: <b>${esc(hostName)}</b>`);
+        lines.push(L.youare(2));
+      }
+      if (live && rtt) lines.push(`${L.ping} ${Math.round(rtt)} ms`);
+      if (note) lines.push(`<span class="err">${esc(note)}</span>`);
+      $('n64-r-lines').innerHTML = lines.filter(Boolean).join('<br>');
+      $('n64-r-kick').hidden = !(isHost && guestHere);
+      $('n64-r-kick').textContent = L.kick(guestName || L.player);
+      $('n64-r-again').hidden = !(isHost && ended);
+      $('n64-r-again').textContent = L.again;
+      $('n64-r-leave').textContent = L.leaveroom;
+    }
+    window.addEventListener('DOMContentLoaded', () => {
+      panel();
+      $('n64-r-leave').onclick = () => { location.href = location.pathname; };
+      $('n64-r-kick').onclick = () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'kick' })); };
+      // A new match: this page reloads (the game starts over) and makes the room again with the same code.
+      $('n64-r-again').onclick = () => {
+        const next = location.pathname + '?online=new&room=' + code;
+        if (ws) ws.close();
+        setTimeout(() => { location.href = next; }, 300);
+      };
+    });
 
     const HIST = 1024, PKT_INPUT = 1, PKT_HASH = 2, MAX_SEND = 32;
     let ws = null, pc = null, ctl = null, inp = null, relay = false, connected = false, live = false, error = false;
@@ -378,7 +453,7 @@
       if (!url) { say(L.noserver, true); return; }
       say(L.server);
       ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
-      ws.onopen = () => ws.send(JSON.stringify(isHost ? { t: 'create', code } : { t: 'join', code }));
+      ws.onopen = () => ws.send(JSON.stringify(isHost ? { t: 'create', code, name: myName } : { t: 'join', code, name: myName }));
       ws.onerror = () => { if (!connected) say(L.noserver, true); };
       ws.onclose = () => { if (!connected && !error) say(L.noserver, true); };
       ws.onmessage = (e) => {
@@ -388,11 +463,22 @@
           code = m.code;
           head = `${L.room} <span class="code">${code}</span>`; foot = L.you1;
           body = `<div>${L.created}</div>`;
-          draw();
-        } else if (m.t === 'joined') { code = m.code; head = `${L.room} <span class="code">${code}</span>`; say(L.peer); peerUp(); }
-        else if (m.t === 'peer-joined') { say(L.peer); peerUp(); }
-        else if (m.t === 'peer-left') { if (live) { stop(); say(L.left, true); } else say(L.left, true); }
-        else if (m.t === 'error') say(m.msg === 'no-room' ? L.noroom : m.msg === 'room-full' ? L.full : L.noserver, true);
+          draw(); panel();
+        } else if (m.t === 'joined') {
+          code = m.code; hostName = m.host || L.player;
+          head = `${L.room} <span class="code">${code}</span>`; say(L.peer); panel(); peerUp();
+        } else if (m.t === 'peer-joined') { guestName = m.name || L.player; guestHere = true; say(L.peer); panel(); peerUp(); }
+        else if (m.t === 'peer-left') {
+          const text = isHost ? (m.kicked ? L.kickedother(guestName || L.player) : L.left) : L.ownerleft;
+          guestHere = false;
+          if (live || !isHost) { stop(); ended = true; note = isHost ? L.againnote : ''; say(text, true); }
+          else { dropPeer(); body = `<div>${L.created}</div>`; draw(); }
+          panel();
+        } else if (m.t === 'kicked') { stop(); dropPeer(); ended = true; say(L.kicked, true); note = L.kicked; panel(); }
+        else if (m.t === 'error') {
+          say(m.msg === 'no-room' ? L.noroom : m.msg === 'room-full' ? L.full : m.msg === 'in-game' ? L.ingame : L.noserver, true);
+          note = m.msg === 'in-game' ? L.ingame : m.msg === 'no-room' ? L.noroom : m.msg === 'room-full' ? L.full : ''; panel();
+        }
         else if (m.t === 'signal') onSignal(m.data);
         else if (m.t === 'ctl') onCtl(m.data);
       };
@@ -415,7 +501,14 @@
         wire(pc.createDataChannel('in', { ordered: false, maxRetransmits: 0 }));
         pc.createOffer().then((o) => pc.setLocalDescription(o)).then(() => ws.send(JSON.stringify({ t: 'signal', data: { sdp: pc.localDescription } })));
       } else pc.ondatachannel = (e) => wire(e.channel);
-      setTimeout(() => { if (!connected && !error) { relay = true; console.log('[net] through the room server'); say(L.relay); onConnected(); } }, 8000);
+      relayTimer = setTimeout(() => { if (!connected && !error) { relay = true; console.log('[net] through the room server'); say(L.relay); onConnected(); } }, 8000);
+    }
+    // The other player left before the match began: back to waiting, ready for the next one.
+    function dropPeer() {
+      clearTimeout(relayTimer); clearInterval(pingTimer);
+      if (pc) pc.close();
+      pc = ctl = inp = null; connected = false; relay = false; pings = 0; rtt = 0; minRtt = Infinity;
+      signals = Promise.resolve();
     }
     // One setup message at a time, in order: a network address that arrives while the offer or answer is still being
     // applied would otherwise be refused, and without them the direct connection fails (and play goes through the server).
@@ -427,22 +520,23 @@
         if (d.sdp.type === 'offer') { await pc.setLocalDescription(await pc.createAnswer()); ws.send(JSON.stringify({ t: 'signal', data: { sdp: pc.localDescription } })); }
       } else if (d.ice) { try { await pc.addIceCandidate(d.ice); } catch (e) {} }
     }
-    let pings = 0;
+    let pings = 0, pingTimer = 0, relayTimer = 0, minRtt = Infinity;
     function onConnected() {
       if (connected) return;
       connected = true;
-      setInterval(() => sendCtl({ t: 'ping', ts: performance.now() }), 1000);
+      pingTimer = setInterval(() => sendCtl({ t: 'ping', ts: performance.now() }), 1000);
       if (isHost) for (let k = 0; k < 5; k++) setTimeout(() => sendCtl({ t: 'ping', ts: performance.now() }), k * 150);
     }
     function onCtl(raw) {
       const m = JSON.parse(raw);
       if (m.t === 'ping') sendCtl({ t: 'pong', ts: m.ts });
       else if (m.t === 'pong') {
-        const r = performance.now() - m.ts; rtt = rtt ? rtt * 0.8 + r * 0.2 : r;
-        if (live) { foot = `${L.live(isHost ? 1 : 2)} ${L.ping} ${Math.round(rtt)} ms`; draw(); }
-        // The host picks the delay from the first round trips: a frame's input must cross before the frame plays.
+        const r = performance.now() - m.ts; rtt = rtt ? rtt * 0.8 + r * 0.2 : r; minRtt = Math.min(minRtt, r);
+        if (live) { foot = `${L.live(isHost ? 1 : 2)} ${L.ping} ${Math.round(rtt)} ms`; draw(); panel(); }
+        // The host picks the delay from the first round trips (the shortest: the pages are busy loading the game, which
+        // makes some answers late): a frame's input must cross before the frame plays.
         if (isHost && !live && ++pings === 5) {
-          const d = Math.max(3, Math.min(12, Math.ceil(rtt / 2 / (1000 / 60)) + 3));
+          const d = Math.max(3, Math.min(12, Math.ceil(minRtt / 2 / (1000 / 60)) + 3));
           sendCtl({ t: 'go', delay: d }); go(d);
         }
       } else if (m.t === 'go') go(m.delay);
@@ -456,6 +550,8 @@
       }
       delay = d; remoteNext = d; live = true;
       M._n64web_net_begin(isHost ? 0 : 1, d);
+      // Both games run from their boot in step: nobody can join this one midway.
+      if (isHost && ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'lock' }));
       foot = L.live(isHost ? 1 : 2); body = ''; head = ''; draw();
       setInterval(() => { if (live && performance.now() - lastSend > 50) sendInputs(); }, 50);
     }

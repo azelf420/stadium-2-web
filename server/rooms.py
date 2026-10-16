@@ -5,7 +5,10 @@
 #   python3 server/rooms.py [--port 8787] [--origin https://example.github.io] [--origin http://127.0.0.1:8090]
 #
 # Messages are JSON text, as the page sends them (ports/stadium2/site/retro.html):
-#   {t:'create'[, code]} -> {t:'created', code}      {t:'join', code} -> {t:'joined', code} (+ {t:'peer-joined'} to host)
+#   {t:'create'[, code][, name]} -> {t:'created', code}
+#   {t:'join', code[, name]}     -> {t:'joined', code, host: <host's name>}, and {t:'peer-joined', name} to the host
+#   {t:'kick'} (host)            -> {t:'kicked'} to the guest, who is out of the room, and {t:'peer-left', kicked} back
+#   {t:'lock'} (host)            -> the game started: nobody else can join ({t:'error', msg:'in-game'})
 #   anything else in a room goes to the other player as is; binary frames too (the relay for game packets).
 import argparse
 import asyncio
@@ -20,7 +23,7 @@ CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'  # no 0/O, 1/I
 MAX_MESSAGE = 64 * 1024
 MAX_ROOMS = 500
 
-rooms = {}  # code -> {'host': Peer, 'guest': Peer | None}
+rooms = {}  # code -> {'host': Peer, 'guest': Peer | None, 'locked': bool}
 
 
 class Closed(Exception):
@@ -31,6 +34,7 @@ class Peer:
     def __init__(self, reader, writer):
         self.reader, self.writer = reader, writer
         self.room = None
+        self.name = ''
         self.lock = asyncio.Lock()
 
     async def send(self, data):
@@ -96,6 +100,11 @@ class Peer:
                 parts, kind = [], None
 
 
+def clean_name(value):
+    name = ''.join(c for c in str(value or '') if c.isprintable() and c not in '<>&"')
+    return name.strip()[:12]
+
+
 def other(peer):
     room = rooms.get(peer.room)
     if not room:
@@ -122,20 +131,36 @@ async def on_message(peer, message):
             code = ''.join(secrets.choice(CODE_LETTERS) for _ in range(4))
             while code in rooms:
                 code = ''.join(secrets.choice(CODE_LETTERS) for _ in range(4))
-        rooms[code] = {'host': peer, 'guest': None}
+        rooms[code] = {'host': peer, 'guest': None, 'locked': False}
         peer.room = code
+        peer.name = clean_name(msg.get('name'))
         await peer.send_json({'t': 'created', 'code': code})
     elif kind == 'join' and peer.room is None:
         code = str(msg.get('code') or '').upper()
         room = rooms.get(code)
         if not room:
             return await peer.send_json({'t': 'error', 'msg': 'no-room'})
+        if room['locked']:
+            return await peer.send_json({'t': 'error', 'msg': 'in-game'})
         if room['guest']:
             return await peer.send_json({'t': 'error', 'msg': 'room-full'})
         room['guest'] = peer
         peer.room = code
-        await peer.send_json({'t': 'joined', 'code': code})
-        await room['host'].send_json({'t': 'peer-joined'})
+        peer.name = clean_name(msg.get('name'))
+        await peer.send_json({'t': 'joined', 'code': code, 'host': room['host'].name})
+        await room['host'].send_json({'t': 'peer-joined', 'name': peer.name})
+    elif kind == 'kick' and peer.room is not None:
+        room = rooms.get(peer.room)
+        if room and room['host'] is peer and room['guest']:
+            guest = room['guest']
+            room['guest'] = None
+            guest.room = None
+            await guest.send_json({'t': 'kicked'})
+            await peer.send_json({'t': 'peer-left', 'kicked': True})
+    elif kind == 'lock' and peer.room is not None:
+        room = rooms.get(peer.room)
+        if room and room['host'] is peer:
+            room['locked'] = True
     elif peer.room is not None:
         target = other(peer)
         if target:

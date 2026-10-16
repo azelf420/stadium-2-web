@@ -2,6 +2,11 @@
 
 What changed and how it was tested. Measurements come from headless Chrome on an Apple M1 unless said otherwise.
 
+## Rooms
+- Players have a name. In a room the panel shows the room code, who is in it and its owner; the owner can kick the
+  other player, and both can leave. A match can't take a new player midway (both games run from boot in step), so
+  after the other player leaves the owner gets NEW MATCH, which restarts the game with the same room code.
+
 ## Faster start
 - The ROM is kept in the browser after the first time (only the US ROM, checked by its SHA-256), whether it was
   picked as a file or came from an address: later visits start without asking or downloading.

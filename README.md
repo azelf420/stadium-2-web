@@ -30,8 +30,9 @@ Not tested yet: Gym Leader Castle, mini games, GB Tower, Firefox, Safari, phones
 
 ## Online mode
 
-In the side panel, **CREATE ROOM** gives a 4 letter code: give it to a friend, who types it in the panel and clicks
-**JOIN**. Whoever creates the room is player 1, the friend is player 2, and the game starts over on both pages. Each player runs the game from their
+In the side panel, type your name and click **CREATE ROOM**: you get a 4 letter code to give to a friend, who types it
+in the panel and clicks **JOIN**. The owner sees who is in the room and can kick them; the friend sees the room and
+its owner, and both can leave. Whoever creates the room is player 1, the friend is player 2, and the game starts over on both pages. Each player runs the game from their
 own ROM; only the controllers travel between the two browsers (directly when the networks allow it, otherwise through
 the room server). Every second the two games compare a fingerprint of their memory; if they ever differ, the page says
 so and online play stops.
