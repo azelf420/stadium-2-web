@@ -123,6 +123,13 @@
     } catch (e) {}
     if (!window.crossOriginIsolated || !navigator.gpu || !window.indexedDB && !url) return;
     const pt = /^pt/i.test(navigator.language || '');
+    // Frames the page has drawn (each present asks the canvas for a texture): how the start-up line below knows the
+    // game is on screen.
+    let frames = 0;
+    if (window.GPUCanvasContext) {
+      const next = GPUCanvasContext.prototype.getCurrentTexture;
+      GPUCanvasContext.prototype.getCurrentTexture = function () { frames++; return next.apply(this, arguments); };
+    }
     const ROM_SIZE = 64 << 20, ROM_SHA256 = '8160abe7d4b9734317000c44e9f882efefe4cc6359eacded98be62f2811e40a9';
     // The status line also carries the page's errors (red): never write over one.
     const say = (text) => { const st = document.getElementById('status'); if (st && !st.style.color) st.textContent = text; };
@@ -141,19 +148,27 @@
       const db = await store();
       db.transaction('rom', 'readwrite').objectStore('rom').put(bytes, 'us');
     };
+    // Start-up line: each step as it passes (the ROM, the game taking it, the graphics being prepared, the first
+    // frames), cleared once the game is on screen. A start that never gets there says where it stopped. (A page that
+    // runs out of memory is closed by the browser, which then shows its own message.)
     const start = (rom) => {
       globalThis.n64webRom = rom; globalThis.n64webRomState = 'done';
-      say(pt ? 'ROM pronta. Iniciando o jogo...' : 'ROM ready. Starting the game...');
-      // The game clears the status line once it runs. Still there after 90 s: it most likely ran out of memory.
-      setTimeout(() => {
+      const t0 = performance.now();
+      const tick = setInterval(() => {
         const st = document.getElementById('status');
-        if (st && st.textContent && !st.style.color) {
-          st.style.color = '#f88';
-          st.textContent = pt
-            ? 'O jogo não iniciou. Este aparelho provavelmente não tem memória suficiente (o jogo usa cerca de 1,5 GB). Num computador com Chrome ou Edge ele roda.'
-            : 'The game did not start. This device most likely ran out of memory (the game uses about 1.5 GB). It runs on a computer with Chrome or Edge.';
-        }
-      }, 90000);
+        if (!st || st.style.color) { clearInterval(tick); return; }
+        if (frames > 60) { st.textContent = ''; clearInterval(tick); return; }
+        const took = globalThis.n64webRom === null;
+        const shaders = document.getElementById('shaders');
+        const prep = shaders && !shaders.hidden ? (shaders.querySelector('.figures') || {}).textContent || '…' : (took ? '✓' : '…');
+        const steps = [['ROM', true], [pt ? 'jogo' : 'game', took], [pt ? 'gráficos' : 'graphics', prep], [pt ? 'imagem' : 'picture', frames > 0]]
+          .map(([name, v]) => name + ' ' + (v === true ? '✓' : v === false ? '…' : v));
+        const secs = Math.round((performance.now() - t0) / 1000);
+        if (secs < 240) { st.textContent = (pt ? 'Iniciando o jogo' : 'Starting the game') + ` (${secs} s): ` + steps.join(' · '); return; }
+        st.style.color = '#f88';
+        st.textContent = (pt ? 'O jogo não iniciou em 4 minutos. Parou em: ' : 'The game did not start in 4 minutes. It stopped at: ') + steps.join(' · ');
+        clearInterval(tick);
+      }, 1000);
     };
     // A ROM picked in the game's file dialog is kept too: the dialog's file input is made by the game, off the page.
     const make = document.createElement.bind(document);
