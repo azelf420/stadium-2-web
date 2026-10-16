@@ -1,0 +1,24 @@
+# Whitelist: everything is ignored except the port's own files. ROMs, sources fetched into games/, builds and the
+# toolchain in sdk/ never get committed.
+*
+!*/
+!.gitignore
+!README.md
+!LICENSE
+!CREDITS.md
+!CHANGELOG.md
+!STATUS.md
+!AGENTS.md
+!tools/*.sh
+!tools/*.py
+!tools/*.mjs
+!ports/**/*.patch
+!ports/**/*.txt
+!ports/**/*.json
+!ports/**/*.cpp
+!ports/**/*.h
+!ports/**/*.html
+roms/
+sdk/
+games/
+build*/

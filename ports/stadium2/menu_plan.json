@@ -1,0 +1,12 @@
+{
+  "page": "game.html",
+  "load": [["until", "choose your Pokemon Stadium 2", 180000], ["wait", 1500]],
+  "setup": [["rom", 570, 322]],
+  "start": [],
+  "play": [
+    ["wait", 40000],
+    ["hold", "Enter", "Enter", 13, 150], ["wait", 7000], ["shot", "menu_1.png"],
+    ["hold", "Enter", "Enter", 13, 150], ["wait", 6000], ["shot", "menu_2.png"],
+    ["hold", "KeyX", "x", 88, 150], ["wait", 6000], ["shot", "menu_3.png"]
+  ]
+}

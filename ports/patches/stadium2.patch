@@ -1,0 +1,172 @@
+diff --git a/src/main/main.cpp b/src/main/main.cpp
+index 2a6075c..aca9af1 100644
+--- a/src/main/main.cpp
++++ b/src/main/main.cpp
+@@ -88,6 +88,16 @@ std::filesystem::path exe_dir() {
+     char buf[MAX_PATH] = {0};
+     GetModuleFileNameA(nullptr, buf, MAX_PATH);
+     return std::filesystem::path(buf).parent_path();
++#elif defined(__EMSCRIPTEN__)
++    static const bool assets_linked = [] {
++        std::error_code ec;
++        if (!std::filesystem::exists("/home/web_user/assets", ec)) {
++            std::filesystem::create_directory_symlink("/assets", "/home/web_user/assets", ec);
++        }
++        return true;
++    }();
++    (void)assets_linked;
++    return std::filesystem::path("/home/web_user");
+ #elif defined(__ANDROID__)
+     const char* internal_storage = SDL_AndroidGetInternalStoragePath();
+     if (internal_storage != nullptr && internal_storage[0] != '\0') {
+@@ -474,6 +484,30 @@ extern "C" void psr_dump_trace_snapshot(const char* name) {
+ #include "ares_worker.h"
+ #include "transfer_pak.h"
+ #include "recompui_launcher.h"
++#ifdef __EMSCRIPTEN__
++#include "file_picker.h"
++#include "audio_output.h"
++#include <emscripten.h>
++#include <thread>
++// The ROM the local server offers at /baserom.z64, or nothing (a 404, or a host that doesn't).
++EM_JS(int, psr_web_served_rom_size, (), {
++    try {
++        const x = new XMLHttpRequest(); x.open('GET', '/baserom.z64', false); x.responseType = 'arraybuffer'; x.send();
++        if (x.status !== 200 || !x.response) return 0;
++        globalThis.psrServedRom = new Uint8Array(x.response);
++        return globalThis.psrServedRom.length;
++    } catch (e) { return 0; }
++});
++EM_JS(void, psr_web_served_rom_copy, (uint8_t* dst), {
++    HEAPU8.set(globalThis.psrServedRom, dst); globalThis.psrServedRom = null;
++});
++static std::vector<uint8_t> psr_web_fetch_served_rom() {
++    std::vector<uint8_t> out;
++    const int size = psr_web_served_rom_size();
++    if (size > 0) { out.resize(size_t(size)); psr_web_served_rom_copy(out.data()); }
++    return out;
++}
++#endif
+ #include "input_bindings.h"
+ 
+ extern "C" void recomp_entrypoint(uint8_t* rdram, recomp_context* ctx);
+@@ -1002,7 +1036,18 @@ static RspUcodeFunc* get_rsp_microcode(uint8_t* rdram, const OSTask* task) {
+             // built from ROM 0x1060 at IMEM 0x1000, without prepending
+             // rspboot; see tools/build_ps2_aspmain.py).
+             return aspMain_ps2;
+-        case M_NJPEGTASK: return njpgdspMain;
++        case M_NJPEGTASK: {
++            static std::atomic<int> n_jpeg{0};
++            const int n = n_jpeg.fetch_add(1);
++            if (n < 4) {
++                fprintf(stderr, "[n64web-jpeg] #%d data_ptr=0x%08X data_size=0x%X output=0x%08X output_size=0x%X yield=0x%08X flags=0x%X\n",
++                        n, (uint32_t)task->t.data_ptr, (uint32_t)task->t.data_size, (uint32_t)task->t.output_buff,
++                        (uint32_t)task->t.output_buff_size, (uint32_t)task->t.yield_data_ptr, (uint32_t)task->t.flags);
++                const uint32_t* d = reinterpret_cast<const uint32_t*>(rdram + (((uint32_t)task->t.data_ptr) & 0x7FFFFF));
++                fprintf(stderr, "[n64web-jpeg]   data: %08X %08X %08X %08X %08X %08X %08X %08X\n", d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
++            }
++            return njpgdspMain;
++        }
+         default:
+             fprintf(stderr, "[Pokemon Stadium] Unknown RSP task type: %u\n", task->t.type);
+             return nullptr;
+@@ -1691,8 +1736,41 @@ extern "C" int      psr_audio_wasapi_enabled(void);
+ extern "C" int      psr_audio_wasapi_start(void);
+ extern "C" unsigned psr_query_wasapi_mix_rate(void);
+ 
++#ifdef __EMSCRIPTEN__
++// Keeps the AudioWorklet's ring about 40 ms ahead, pulling the bridge in 256-frame pieces, as a host audio thread would.
++static void psr_web_audio_pump() {
++    std::vector<float> buf(256 * output_channels);
++    const size_t target = output_sample_rate / 25;
++    for (;;) {
++        while (n64recomp_browser::audio::queued_frames() < target) {
++            psr_audio_fill_f32(buf.data(), 256);
++            n64recomp_browser::audio::queue(buf.data(), 256);
++        }
++        SDL_Delay(2);
++    }
++}
++#endif
++
+ static void reset_audio(uint32_t output_freq) {
+     bool use_bridge = audio_bridge_enabled();
++#ifdef __EMSCRIPTEN__
++    if (use_bridge) {
++        static bool started = false;
++        output_sample_rate = n64recomp_browser::audio::open(output_channels);
++        update_audio_converter();
++        if (!g_audio_mtx) g_audio_mtx = SDL_CreateMutex();
++        SDL_LockMutex(g_audio_mtx);
++        bridge_reinit_locked();
++        SDL_UnlockMutex(g_audio_mtx);
++        if (!started) {
++            started = true;
++            std::thread(psr_web_audio_pump).detach();
++        }
++        fprintf(stderr, "[PSR][audio] web AudioWorklet output  src=%u -> host=%u  ready=%d\n",
++                sample_rate, output_sample_rate, g_bridge_ready);
++        return;  // no SDL audio device on the page
++    }
++#endif
+     // ---- Native WASAPI render path (cpal-style: event-driven, shared-mode, native
+     // mix format, default engine buffer, Pro-Audio thread). Bypasses SDL2 audio so
+     // we can A/B against it by ear. The bridge still produces the PCM; only the
+@@ -1813,7 +1891,11 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
+     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+ #endif
+     g_window = SDL_CreateWindow(
++#ifdef __EMSCRIPTEN__
++        "n64web",
++#else
+         "Pokemon Stadium 2 Recomp",
++#endif
+         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+         960, 720,
+ #if defined(__ANDROID__)
+@@ -1841,7 +1923,7 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
+     SDL_GetWindowWMInfo(g_window, &wmInfo);
+ #if defined(_WIN32)
+     return ultramodern::renderer::WindowHandle{ wmInfo.info.win.window, GetCurrentThreadId() };
+-#elif defined(__ANDROID__)
++#elif defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+     return ultramodern::renderer::WindowHandle{ g_window };
+ #elif defined(__linux__)
+     return ultramodern::renderer::WindowHandle{ wmInfo.info.x11.window };
+@@ -2555,7 +2637,7 @@ int main(int argc, char** argv) {
+     // instance) down. Unless PSR_AUTOBOOT bypasses it, we show the launcher,
+     // persist launcher.cfg, and pick up the chosen ROM + per-port input config.
+     const bool autoboot =
+-#ifdef __ANDROID__
++#if defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+         true;
+ #else
+         std::getenv("PSR_AUTOBOOT") != nullptr;
+@@ -2852,6 +2934,27 @@ int main(int argc, char** argv) {
+             if (!GetOpenFileNameA(&ofn)) return false;
+             out = picked;
+             return true;
++#elif defined(__EMSCRIPTEN__)
++            {
++                std::vector<uint8_t> served = psr_web_fetch_served_rom();
++                if (!served.empty()) {
++                    const auto saved = exe_dir / "baserom.z64";
++                    std::ofstream f(saved, std::ios::binary | std::ios::trunc);
++                    f.write(reinterpret_cast<const char*>(served.data()), std::streamsize(served.size()));
++                    f.close();
++                    std::fprintf(stderr, "[PSR] ROM loaded from the page's server (%zu bytes)\n", served.size());
++                    out = saved;
++                    return true;
++                }
++            }
++            std::fprintf(stderr, "[PSR] choose your Pokemon Stadium 2 (US) ROM\n");
++            auto picked = n64recomp_browser::pick_files(false, ".z64,.n64,.v64");
++            if (picked.empty()) return false;
++            std::error_code ec;
++            const auto saved = exe_dir / "baserom.z64";
++            std::filesystem::copy_file(picked[0], saved, std::filesystem::copy_options::overwrite_existing, ec);
++            out = ec ? picked[0] : saved;
++            return true;
+ #else
+             std::fprintf(stderr, "[PSR] no file picker on this platform; pass ROM path on the command line.\n");
+             return false;

@@ -1,0 +1,17 @@
+{
+  "page": "game.html",
+  "load": [["until", "ROM loaded from the page|choose your Pokemon Stadium 2", 180000], ["wait", 1500]],
+  "setup": [],
+  "start": [],
+  "play": [
+    ["wait", 38000],
+    ["eval", "(()=>{const b=()=>Array.from({length:17},()=>({pressed:false,touched:false,value:0}));window.__pad={id:'Fake Standard Gamepad (Vendor: 045e Product: 028e)',index:0,connected:true,mapping:'standard',timestamp:performance.now(),axes:[0,0,0,0],buttons:b(),vibrationActuator:null};navigator.getGamepads=()=>[window.__pad,null,null,null];window.dispatchEvent(Object.assign(new Event('gamepadconnected'),{gamepad:window.__pad}));window.__press=(i,on)=>{window.__pad.buttons[i]={pressed:on,touched:on,value:on?1:0};window.__pad.timestamp=performance.now();};console.log('[pad] fake gamepad connected');return 0;})()"],
+    ["wait", 3000],
+    ["eval", "(()=>{__press(9,true);return 0;})()"], ["wait", 200], ["eval", "(()=>{__press(9,false);return 0;})()"],
+    ["wait", 7000],
+    ["eval", "(()=>{__press(9,true);return 0;})()"], ["wait", 200], ["eval", "(()=>{__press(9,false);return 0;})()"],
+    ["wait", 6000],
+    ["eval", "(()=>{__press(0,true);return 0;})()"], ["wait", 200], ["eval", "(()=>{__press(0,false);return 0;})()"],
+    ["wait", 5000], ["shot", "pad_menu.png"]
+  ]
+}

@@ -1,0 +1,78 @@
+{
+ "page": "site_test.html",
+ "load": [
+  [
+   "until",
+   "ROM loaded from the page|choose your Pokemon Stadium 2",
+   180000
+  ],
+  [
+   "wait",
+   1500
+  ]
+ ],
+ "setup": [],
+ "start": [],
+ "play": [
+  [
+   "wait",
+   40000
+  ],
+  [
+   "shot",
+   "touch_title.png"
+  ],
+  [
+   "eval",
+   "(()=>{document.querySelector('#n64-touch .start').dispatchEvent(new PointerEvent('pointerdown',{pointerId:7,bubbles:true,cancelable:true}));return 0;})()"
+  ],
+  [
+   "wait",
+   250
+  ],
+  [
+   "eval",
+   "(()=>{document.querySelector('#n64-touch .start').dispatchEvent(new PointerEvent('pointerup',{pointerId:7,bubbles:true}));return 0;})()"
+  ],
+  [
+   "wait",
+   7000
+  ],
+  [
+   "eval",
+   "(()=>{document.querySelector('#n64-touch .start').dispatchEvent(new PointerEvent('pointerdown',{pointerId:7,bubbles:true,cancelable:true}));return 0;})()"
+  ],
+  [
+   "wait",
+   250
+  ],
+  [
+   "eval",
+   "(()=>{document.querySelector('#n64-touch .start').dispatchEvent(new PointerEvent('pointerup',{pointerId:7,bubbles:true}));return 0;})()"
+  ],
+  [
+   "wait",
+   6000
+  ],
+  [
+   "eval",
+   "(()=>{document.querySelector('#n64-touch .a').dispatchEvent(new PointerEvent('pointerdown',{pointerId:7,bubbles:true,cancelable:true}));return 0;})()"
+  ],
+  [
+   "wait",
+   250
+  ],
+  [
+   "eval",
+   "(()=>{document.querySelector('#n64-touch .a').dispatchEvent(new PointerEvent('pointerup',{pointerId:7,bubbles:true}));return 0;})()"
+  ],
+  [
+   "wait",
+   5000
+  ],
+  [
+   "shot",
+   "touch_menu.png"
+  ]
+ ]
+}

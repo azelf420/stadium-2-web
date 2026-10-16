@@ -1,0 +1,25 @@
+diff --git a/renderer/rt64_web_renderer.cpp b/renderer/rt64_web_renderer.cpp
+index b8d7ef1..27c0bb2 100644
+--- a/renderer/rt64_web_renderer.cpp
++++ b/renderer/rt64_web_renderer.cpp
+@@ -8,6 +8,8 @@
+ // the cross-origin isolation headers threads need, and get its WebGPU device from plume_webgpu_device.js (--pre-js).
+ 
+ #include "rt64_web_renderer.h"
++#include <emscripten.h>
++#include <cstdio>
+ 
+ #include "hle/rt64_application.h"
+ #include "ultramodern/ultramodern.hpp"
+@@ -73,6 +75,11 @@ namespace {
+             // The defaults of a recomp's settings: the canvas's resolution in whole multiples of 240 lines, the original
+             // aspect ratio, no MSAA (WebGPU has no sample positions), and the game's own frame pacing.
+             app->userConfig.resolution = RT64::UserConfiguration::Resolution::WindowIntegerScale;
++            // n64-web diagnostic: ?res=1 renders at the N64's own resolution (Resolution::Original).
++            if (MAIN_THREAD_EM_ASM_INT({ return new URLSearchParams(location.search).get('res') === '1' ? 1 : 0; })) {
++                app->userConfig.resolution = RT64::UserConfiguration::Resolution::Original;
++                fprintf(stderr, "[n64web-res] RT64 at the original resolution\n");
++            }
+             app->userConfig.downsampleMultiplier = 1;
+             app->userConfig.aspectRatio = RT64::UserConfiguration::AspectRatio::Original;
+             app->userConfig.extAspectRatio = RT64::UserConfiguration::AspectRatio::Original;

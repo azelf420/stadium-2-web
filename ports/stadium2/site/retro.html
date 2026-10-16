@@ -1,0 +1,204 @@
+<!-- n64web retro side panel: injected into the built page by tools/make_site.py (style before </head>, the panel
+     after <body>). The game canvas keeps the rest of the window; the panel never takes keyboard focus from it. -->
+<!--STYLE-->
+<style>
+  :root { --panel: 300px; }
+  body.n64-panel #canvas { width: calc(100vw - var(--panel)); margin-left: var(--panel); }
+  body.n64-panel #status { left: var(--panel); }
+  #n64 { position: fixed; left: 0; top: 0; bottom: 0; width: var(--panel); box-sizing: border-box; overflow-y: auto;
+         padding: 10px 10px 14px; color: #fff; font: 13px/1.35 Verdana, Tahoma, sans-serif; user-select: none;
+         background:
+           radial-gradient(1px 1px at 20px 30px, #fff, transparent), radial-gradient(1px 1px at 120px 80px, #ffd, transparent),
+           radial-gradient(1px 1px at 230px 40px, #fff, transparent), radial-gradient(1px 1px at 60px 140px, #cdf, transparent),
+           radial-gradient(1px 1px at 190px 170px, #fff, transparent), radial-gradient(1px 1px at 270px 120px, #fff, transparent),
+           linear-gradient(180deg, #120a3a 0%, #070420 60%, #000 100%);
+         background-size: 300px 200px, 300px 200px, 300px 200px, 300px 200px, 300px 200px, 300px 200px, 100% 100%;
+         border-right: 5px ridge #6b5cff; scrollbar-color: #6b5cff #070420; }
+  body:not(.n64-panel) #n64 { display: none; }
+  #n64 fieldset { border: 3px ridge #b9b0ff; margin: 0 0 10px; padding: 6px 8px 8px; background: #0008; }
+  #n64 legend { font: bold 13px "Comic Sans MS", "Comic Sans", cursive; color: #ff0; padding: 0 4px; text-shadow: 1px 1px 0 #c00; }
+  #n64 table { width: 100%; border-collapse: collapse; }
+  #n64 td { padding: 3px 2px; vertical-align: middle; }
+  #n64 td:first-child { width: 96px; }
+  .n64-pad { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #b9b0ff; color: #9ff; font-size: 11px; }
+  .n64-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px;
+             border-radius: 50%; font: bold 12px Verdana, sans-serif; color: #fff; box-shadow: inset -2px -2px 0 #0006, inset 2px 2px 0 #fff5;
+             text-shadow: 1px 1px 0 #0008; box-sizing: border-box; }
+  .n64-btn.a { background: #2a5bd7; } .n64-btn.b { background: #1e9b3c; } .n64-btn.c { background: #f7c600; color: #222; text-shadow: none; }
+  .n64-btn.start { background: #e3262b; border-radius: 11px; } .n64-btn.gray { background: #777; border-radius: 4px; }
+  kbd { display: inline-block; min-width: 16px; padding: 1px 5px; margin: 1px 1px; text-align: center; color: #000;
+        background: linear-gradient(#fafafa, #c8c8c8); border: 2px outset #eee; font: bold 11px Verdana, sans-serif; }
+  .n64-b3 { display: block; width: 100%; margin: 6px 0 0; padding: 6px 4px; cursor: pointer; color: #000;
+            font: bold 13px "Comic Sans MS", "Comic Sans", cursive; background: linear-gradient(#e6e6e6, #b5b5b5);
+            border: 3px outset #f2f2f2; }
+  .n64-b3:active { border-style: inset; background: linear-gradient(#b5b5b5, #e6e6e6); }
+  .n64-b3:disabled { cursor: not-allowed; color: #777; background: repeating-linear-gradient(45deg, #333 0 10px, #222 10px 20px);
+                     border: 3px outset #555; position: relative; }
+  .n64-soon { display: block; margin-top: 2px; color: #ff0; font: bold 11px Verdana, sans-serif; letter-spacing: 1px;
+              }
+  .n64-new { color: #f0f; font-weight: bold; }
+  .n64-count { text-align: center; margin: 6px 0; font-size: 11px; color: #ccc; }
+  #n64-visits { display: inline-block; padding: 1px 6px; background: #000; color: #f33; border: 2px inset #555;
+                    font: bold 14px "Courier New", monospace; letter-spacing: 2px; }
+  #n64-open { position: fixed; left: 6px; top: 6px; z-index: 5; display: none; }
+  body:not(.n64-panel) #n64-open { display: block; width: auto; }
+  #n64 .foot { text-align: center; font-size: 10px; color: #99a; margin-top: 8px; }
+  @media (max-width: 760px) { body.n64-panel #canvas { width: 100vw; margin-left: 0; } body.n64-panel #status { left: 0; }
+                              #n64 { z-index: 6; } }
+
+  /* Touch controls: only on touch screens. A virtual standard gamepad the game reads like a real one. */
+  #n64-touch { position: fixed; inset: 0; z-index: 4; pointer-events: none; display: none; touch-action: none;
+               user-select: none; -webkit-user-select: none; font: bold 16px Verdana, sans-serif; }
+  body.n64-touch #n64-touch { display: block; }
+  #n64-touch .t { position: absolute; pointer-events: auto; display: flex; align-items: center; justify-content: center;
+                  color: #fff; background: #ffffff26; border: 2px solid #ffffff59; border-radius: 50%; box-sizing: border-box;
+                  text-shadow: 1px 1px 0 #000; -webkit-tap-highlight-color: transparent; }
+  #n64-touch .t.on { background: #ffffff66; }
+  #n64-touch .a { width: 70px; height: 70px; right: 22px; bottom: 34px; background: #2a5bd799; }
+  #n64-touch .b { width: 56px; height: 56px; right: 100px; bottom: 74px; background: #1e9b3c99; }
+  #n64-touch .c { width: 40px; height: 40px; background: #f7c60099; color: #222; text-shadow: none; font-size: 13px; }
+  #n64-touch .cu { right: 66px; bottom: 182px; } #n64-touch .cd { right: 66px; bottom: 112px; }
+  #n64-touch .cl { right: 108px; bottom: 147px; } #n64-touch .cr { right: 24px; bottom: 147px; }
+  #n64-touch .start { width: 74px; height: 32px; left: calc(50% - 37px); bottom: 14px; border-radius: 16px; background: #e3262b99; font-size: 12px; }
+  #n64-touch .sh { width: 76px; height: 38px; top: 10px; border-radius: 10px; font-size: 14px; }
+  #n64-touch .l { left: 12px; } #n64-touch .r { right: 12px; } #n64-touch .z { left: 96px; width: 52px; }
+  #n64-touch .d { width: 38px; height: 38px; border-radius: 8px; font-size: 13px; }
+  #n64-touch .du { left: 61px; top: 64px; } #n64-touch .dd { left: 61px; top: 140px; }
+  #n64-touch .dl { left: 23px; top: 102px; } #n64-touch .dr { left: 99px; top: 102px; }
+  #n64-touch .stick { width: 130px; height: 130px; left: 26px; bottom: 26px; }
+  #n64-touch .knob { position: absolute; width: 56px; height: 56px; left: 37px; top: 37px; border-radius: 50%;
+                     background: #ffffff59; border: 2px solid #fff9; pointer-events: none; }
+  body.n64-touch #n64-open { left: 50%; transform: translateX(-50%); top: 6px; }
+</style>
+<!--/STYLE-->
+<!--PANEL-->
+<button id="n64-open" class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Panel(true)">&#9776; <span data-t="panel"></span></button>
+<div id="n64">
+
+  <fieldset><legend>&#9733; <span data-t="controls"></span> &#9733;</legend>
+    <table>
+      <tr><td><span class="n64-btn a">A</span></td><td><kbd>X</kbd></td></tr>
+      <tr><td><span class="n64-btn b">B</span></td><td><kbd>Z</kbd></td></tr>
+      <tr><td><span class="n64-btn start">START</span></td><td><kbd>Enter</kbd></td></tr>
+      <tr><td><span class="n64-btn gray">Z</span> <span data-t="trigger"></span></td><td><kbd>Shift</kbd> <kbd data-t="space"></kbd></td></tr>
+      <tr><td><span class="n64-btn gray">L</span> <span class="n64-btn gray">R</span></td><td><kbd>Q</kbd> <kbd>E</kbd></td></tr>
+      <tr><td><span class="n64-btn c">C&#9650;</span> <span class="n64-btn c">C&#9660;</span></td><td><kbd>I</kbd> <kbd>K</kbd></td></tr>
+      <tr><td><span class="n64-btn c">C&#9664;</span> <span class="n64-btn c">C&#9654;</span></td><td><kbd>J</kbd> <kbd>L</kbd></td></tr>
+      <tr><td data-t="dpad"></td><td><kbd>&#8593;</kbd><kbd>&#8595;</kbd><kbd>&#8592;</kbd><kbd>&#8594;</kbd></td></tr>
+      <tr><td data-t="stick"></td><td><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></td></tr>
+    </table>
+    <div class="n64-pad" data-t="pad"></div>
+  </fieldset>
+
+  <fieldset><legend>&#9733; <span data-t="options"></span> &#9733;</legend>
+    <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Full()">&#9974; <span data-t="full"></span></button>
+    <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Panel(false)">&#9668; <span data-t="hide"></span></button>
+  </fieldset>
+
+  <div class="n64-count"><span data-t="visits1"></span> <span id="n64-visits">000000</span> <span data-t="visits2"></span></div>
+
+  <button class="n64-b3" disabled tabindex="-1">&#9673; <span data-t="online"></span><span class="n64-soon" data-t="soon"></span></button>
+  <div class="foot"><span class="n64-new" data-t="new"></span> <span data-t="newtext"></span><br><span data-t="rom"></span></div>
+</div>
+<script>
+  // Texts in the visitor's language: Portuguese on a Portuguese browser, English anywhere else.
+  const n64Lang = /^pt/i.test(navigator.language || '') ? 'pt' : 'en';
+  const n64Text = {
+    pt: { panel: 'PAINEL',
+          controls: 'CONTROLES', trigger: 'gatilho', space: 'Espaço', dpad: 'Direcional', stick: 'Analógico',
+          options: 'OPÇÕES', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
+          online: 'MODO ONLINE', soon: 'EM BREVE', new: 'NOVO!', newtext: 'batalha de 2 jogadores pela internet em construção',
+          rom: 'Traga sua própria ROM. Nenhum arquivo do jogo fica neste site.' },
+    en: { panel: 'PANEL',
+          controls: 'CONTROLS', trigger: 'trigger', space: 'Space', dpad: 'D-Pad', stick: 'Stick',
+          options: 'OPTIONS', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
+          online: 'ONLINE MODE', soon: 'COMING SOON', new: 'NEW!', newtext: '2 player battles over the internet under construction',
+          rom: 'Bring your own ROM. No game files are hosted on this site.' },
+  }[n64Lang];
+  document.documentElement.lang = n64Lang === 'pt' ? 'pt-BR' : 'en';
+  document.querySelectorAll('[data-t]').forEach((e) => { e.textContent = n64Text[e.dataset.t]; });
+  // Panel behaviour: show/hide (the canvas takes the freed width; SDL follows the window's resize), fullscreen, and a
+  // visit count kept in this browser only. Nothing here takes the keyboard from the game.
+  function n64Panel(on) {
+    document.body.classList.toggle('n64-panel', on);
+    try { localStorage.setItem('n64web-panel', on ? '1' : '0'); } catch (e) {}
+    setTimeout(() => { window.dispatchEvent(new Event('resize')); document.getElementById('canvas').focus(); }, 0);
+  }
+  function n64Full() {
+    const c = document.getElementById('canvas');
+    (c.requestFullscreen || c.webkitRequestFullscreen).call(c);
+    c.focus();
+  }
+  (function () {
+    let show = true, visits = 1;
+    try {
+      const stored = localStorage.getItem('n64web-panel');
+      show = stored === null ? !matchMedia('(pointer: coarse)').matches : stored !== '0';
+      visits = (parseInt(localStorage.getItem('n64web-visits') || '0', 10) || 0) + 1;
+      localStorage.setItem('n64web-visits', String(visits));
+    } catch (e) {}
+    document.body.classList.toggle('n64-panel', show);
+    document.getElementById('n64-visits').textContent = String(visits).padStart(6, '0');
+  })();
+</script>
+<div id="n64-touch">
+  <div class="t stick" id="n64-stick"><div class="knob" id="n64-knob"></div></div>
+  <div class="t d du" data-b="12">&#9650;</div><div class="t d dd" data-b="13">&#9660;</div>
+  <div class="t d dl" data-b="14">&#9664;</div><div class="t d dr" data-b="15">&#9654;</div>
+  <div class="t sh l" data-b="4">L</div><div class="t sh z" data-b="6">Z</div><div class="t sh r" data-b="5">R</div>
+  <div class="t a" data-b="0">A</div><div class="t b" data-b="1">B</div>
+  <div class="t c cu" data-x="3" data-v="-1">C&#9650;</div><div class="t c cd" data-x="3" data-v="1">C&#9660;</div>
+  <div class="t c cl" data-x="2" data-v="-1">C&#9664;</div><div class="t c cr" data-x="2" data-v="1">C&#9654;</div>
+  <div class="t start" data-b="9">START</div>
+</div>
+<script>
+  // Touch controls: on a touch screen the page adds a virtual standard gamepad (index 0) in front of the real ones;
+  // the game opens it like any controller. Buttons follow the standard layout the game's bindings use: A b0, B b1,
+  // L b4, R b5, Z b6, START b9, D-pad b12..15, the stick on axes 0/1, the C buttons on the right stick (axes 2/3).
+  (function () {
+    if (!(matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window || new URLSearchParams(location.search).has('touch'))) return;
+    document.body.classList.add('n64-touch');
+    // This exact id gets SDL's standard web mapping (START on button 9, tested); other names got a guessed one.
+    const pad = { id: 'Fake Standard Gamepad (Vendor: 045e Product: 028e)', index: 0, connected: true, mapping: 'standard', timestamp: performance.now(),
+                  axes: [0, 0, 0, 0], vibrationActuator: null,
+                  buttons: Array.from({ length: 17 }, () => ({ pressed: false, touched: false, value: 0 })) };
+    // Plugged in on the first touch, like a pad connected while the game runs: the game's SDL then gives it its standard
+    // mapping (a pad already there when SDL starts gets a different, guessed one).
+    const realPads = navigator.getGamepads ? navigator.getGamepads.bind(navigator) : () => [];
+    const announce = () => {
+      navigator.getGamepads = () => [pad, ...Array.from(realPads()).filter(Boolean)].concat([null, null, null]).slice(0, 4);
+      window.dispatchEvent(Object.assign(new Event('gamepadconnected'), { gamepad: pad }));
+    };
+    const touched = () => { pad.timestamp = performance.now(); };
+    let announced = false;
+    document.querySelectorAll('#n64-touch [data-b], #n64-touch [data-x]').forEach((el) => {
+      const set = (on) => {
+        if (!announced) { announced = true; announce(); }
+        el.classList.toggle('on', on);
+        if (el.dataset.b) pad.buttons[+el.dataset.b] = { pressed: on, touched: on, value: on ? 1 : 0 };
+        else pad.axes[+el.dataset.x] = on ? +el.dataset.v : 0;
+        touched();
+      };
+      el.addEventListener('pointerdown', (e) => { e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch (x) {} set(true); });
+      el.addEventListener('pointerup', () => set(false));
+      el.addEventListener('pointercancel', () => set(false));
+    });
+    const stick = document.getElementById('n64-stick'), knob = document.getElementById('n64-knob');
+    const moveStick = (e) => {
+      const r = stick.getBoundingClientRect(), max = r.width / 2;
+      let x = e.clientX - (r.left + max), y = e.clientY - (r.top + max);
+      const len = Math.hypot(x, y); if (len > max) { x *= max / len; y *= max / len; }
+      pad.axes[0] = x / max; pad.axes[1] = y / max; touched();
+      knob.style.transform = `translate(${x}px, ${y}px)`;
+    };
+    stick.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); try { stick.setPointerCapture(e.pointerId); } catch (x) {}
+      if (!announced) { announced = true; announce(); }
+      moveStick(e);
+    });
+    stick.addEventListener('pointermove', (e) => { if (stick.hasPointerCapture(e.pointerId)) moveStick(e); });
+    const release = () => { pad.axes[0] = 0; pad.axes[1] = 0; knob.style.transform = ''; touched(); };
+    stick.addEventListener('pointerup', release); stick.addEventListener('pointercancel', release);
+  })();
+</script>
+<!--/PANEL-->

@@ -1,0 +1,768 @@
+diff --git a/librecomp/CMakeLists.txt b/librecomp/CMakeLists.txt
+index f3348eb..aca7ae4 100644
+--- a/librecomp/CMakeLists.txt
++++ b/librecomp/CMakeLists.txt
+@@ -95,5 +95,10 @@ endif()
+ add_subdirectory(${PROJECT_SOURCE_DIR}/../thirdparty/miniz ${CMAKE_CURRENT_BINARY_DIR}/miniz)
+ add_subdirectory(${PROJECT_SOURCE_DIR}/../N64Recomp ${CMAKE_CURRENT_BINARY_DIR}/N64Recomp EXCLUDE_FROM_ALL)
+ 
+-target_link_libraries(librecomp PRIVATE ultramodern N64Recomp LiveRecomp)
++# WebAssembly can't generate code at runtime, so Emscripten builds have no live recompiler (mods that need it don't load).
++if (EMSCRIPTEN)
++    target_link_libraries(librecomp PRIVATE ultramodern N64Recomp)
++else()
++    target_link_libraries(librecomp PRIVATE ultramodern N64Recomp LiveRecomp)
++endif()
+ target_link_libraries(librecomp PUBLIC miniz)
+diff --git a/librecomp/include/librecomp/addresses.hpp b/librecomp/include/librecomp/addresses.hpp
+index 591d9d9..791a695 100644
+--- a/librecomp/include/librecomp/addresses.hpp
++++ b/librecomp/include/librecomp/addresses.hpp
+@@ -29,7 +29,13 @@ namespace recomp {
+     // without faulting.
+     constexpr size_t mem_size = 1024ULL * 1024ULL * 1024ULL;
+     // 4GB (the full address space)
++#ifdef __EMSCRIPTEN__
++    // A 32-bit address space can't reserve 4 GiB, and WebAssembly memory has no page protection to catch stray
++    // accesses with anyway.
++    constexpr size_t allocation_size = mem_size;
++#else
+     constexpr size_t allocation_size = 4096ULL * 1024ULL * 1024ULL;
++#endif
+     // We need a place in rdram to hold the PI handles, so pick an address in extended rdram
+     constexpr int32_t cart_handle = 0x80800000;
+     constexpr int32_t drive_handle = (int32_t)(cart_handle + sizeof(OSPiHandle));
+diff --git a/librecomp/include/librecomp/mods.hpp b/librecomp/include/librecomp/mods.hpp
+index 6632910..4f19e81 100644
+--- a/librecomp/include/librecomp/mods.hpp
++++ b/librecomp/include/librecomp/mods.hpp
+@@ -49,12 +49,16 @@ template <>
+ struct std::hash<recomp::mods::HookDefinition>
+ {
+     std::size_t operator()(const recomp::mods::HookDefinition& def) const {
+-        // The packing scheme below assumes a 64-bit hash result.
+-        static_assert(sizeof(std::size_t) == 8);
+-        // Fold all three fields together into one 64-bit value. Function
+-        // addresses are at least 4-byte aligned, so their bottom 2 bits are
+-        // free; stash the at_return flag in bit 0.
+-        return (size_t(def.section_rom) << 32) | size_t(def.function_vram) | size_t(def.at_return ? 1 : 0);
++        // Combine the three values into a single 64-bit value.
++        // The lower 2 bits of a function address will always be zero, so pack
++        // the value of at_return into the lowest bit.
++        uint64_t packed = (uint64_t(def.section_rom) << 32) | uint64_t(def.function_vram) | uint64_t(def.at_return ? 1 : 0);
++        if constexpr (sizeof(std::size_t) == 8) {
++            return packed;
++        }
++        else {
++            return std::hash<uint64_t>{}(packed);
++        }
+     }
+ };
+ 
+@@ -348,6 +352,7 @@ namespace recomp {
+ 
+             void register_game(const std::string& mod_game_id);
+             void register_embedded_mod(const std::string& mod_id, std::span<const uint8_t> mod_bytes);
++            void register_precompiled_mod(const recomp_precompiled_mod& code);
+             std::vector<ModOpenErrorDetails> scan_mod_folder(const std::filesystem::path& mod_folder);
+             void close_mods();
+             void load_mods_config();
+@@ -407,6 +412,8 @@ namespace recomp {
+             // Maps game mod ID to the mod's internal integer ID. 
+             std::unordered_map<std::string, size_t> mod_game_ids;
+             std::unordered_map<std::string, std::span<const uint8_t>> embedded_mod_bytes;
++            // Mods' code recompiled ahead of time, by the hash of the mod files it was made from (mod_code_hash).
++            std::unordered_map<uint64_t, const recomp_precompiled_mod*> precompiled_mods;
+             std::vector<ModHandle> opened_mods;
+             std::unordered_map<std::string, size_t> opened_mods_by_id;
+             std::unordered_map<std::filesystem::path::string_type, size_t> opened_mods_by_filename;
+@@ -462,6 +469,8 @@ namespace recomp {
+             ConfigStorage config_storage;
+             std::unique_ptr<ModCodeHandle> code_handle;
+             std::unique_ptr<N64Recomp::Context> recompiler_context;
++            // This mod's code recompiled ahead of time, if the recomp has it (register_precompiled_mod).
++            const recomp_precompiled_mod* precompiled_code = nullptr;
+             std::vector<uint32_t> section_load_addresses;
+             // Content types present in this mod.
+             std::vector<ModContentTypeId> content_types;
+@@ -570,6 +579,29 @@ namespace recomp {
+             int32_t* section_addresses;
+         };
+ 
++        // A mod's code recompiled ahead of time and linked into the executable (recomp_precompiled_mod in recomp.h), for a
++        // platform without the live recompiler. It calls the runtime's functions directly, so it's given no pointers to them.
++        class PrecompiledCodeHandle : public ModCodeHandle {
++        public:
++            PrecompiledCodeHandle(const recomp_precompiled_mod& code, const N64Recomp::Context& context, const ModCodeHandleInputs& inputs);
++            bool good() final { return is_good; }
++            uint32_t get_api_version() final { return 1; }
++            void set_imported_function(size_t import_index, GenericFunction func) final;
++            CodeModLoadError populate_reference_symbols(const N64Recomp::Context& context, std::string& error_param) final;
++            uint32_t get_base_event_index() final {
++                return *code.base_event_index;
++            }
++            void set_local_section_address(size_t section_index, int32_t address) final {
++                code.section_addresses[section_index] = address;
++            }
++            GenericFunction get_function_handle(size_t func_index) final {
++                return GenericFunction{ code.functions[func_index] };
++            }
++        private:
++            const recomp_precompiled_mod& code;
++            bool is_good;
++        };
++
+         class LiveRecompilerCodeHandle : public ModCodeHandle {
+         public:
+             LiveRecompilerCodeHandle(const N64Recomp::Context& context, const ModCodeHandleInputs& inputs,
+@@ -617,7 +649,11 @@ namespace recomp {
+         CodeModLoadError validate_api_version(uint32_t api_version, std::string& error_param);
+ 
+         void initialize_mods();
+-        void register_embedded_mod(const std::string &mod_id, std::span<const uint8_t> mod_bytes);
++        void register_embedded_mod(const std::string& mod_id, std::span<const uint8_t> mod_bytes);
++        // Code for a mod (an embedded one, typically) recompiled ahead of time with OfflineModRecomp --static, which the
++        // runtime runs for a mod whose files it was made from, in place of recompiling it as it loads. Needed where
++        // there's no live recompiler (WebAssembly), where without it a mod with code fails to load.
++        void register_precompiled_mod(const recomp_precompiled_mod& code);
+         void scan_mods();
+         void close_mods();
+         std::filesystem::path get_mods_directory();
+diff --git a/librecomp/src/mods.cpp b/librecomp/src/mods.cpp
+index fab0212..33f59e9 100644
+--- a/librecomp/src/mods.cpp
++++ b/librecomp/src/mods.cpp
+@@ -79,6 +79,9 @@ bool get_to_vec(const nlohmann::json& val, std::vector<T2>& out) {
+ // MSVC/GCC/Clang ARM64
+ #elif defined(__ARM_ARCH_ISA_A64)
+ #   define IS_ARM64
++// WebAssembly: code can't be patched or generated at runtime.
++#elif defined(__wasm__)
++#   define IS_WASM
+ #else
+ #   error "Unsupported architecture!"
+ #endif
+@@ -453,9 +456,9 @@ void recomp::mods::DynamicLibraryCodeHandle::set_imported_function(size_t import
+     }, func);
+ }
+ 
+-recomp::mods::CodeModLoadError recomp::mods::DynamicLibraryCodeHandle::populate_reference_symbols(const N64Recomp::Context& context, std::string& error_param) {
+-    // Walk every relocation across all sections, resolving the call-target
+-    // relocations that point at regular reference sections.
++// Fills a mod's array of the base ROM's functions it calls, for code recompiled ahead of time (a DLL, or linked in).
++static recomp::mods::CodeModLoadError populate_reference_symbol_funcs(const N64Recomp::Context& context, recomp_func_t** reference_symbol_funcs, std::string& error_param) {
++    using namespace recomp::mods;
+     size_t resolved_count = 0;
+     for (const auto& section : context.sections) {
+         for (const auto& reloc : section.relocs) {
+@@ -484,10 +487,35 @@ recomp::mods::CodeModLoadError recomp::mods::DynamicLibraryCodeHandle::populate_
+     return CodeModLoadError::Good;
+ }
+ 
++recomp::mods::CodeModLoadError recomp::mods::DynamicLibraryCodeHandle::populate_reference_symbols(const N64Recomp::Context& context, std::string& error_param) {
++    return populate_reference_symbol_funcs(context, reference_symbol_funcs, error_param);
++}
++
++recomp::mods::PrecompiledCodeHandle::PrecompiledCodeHandle(const recomp_precompiled_mod& code, const N64Recomp::Context& context, const ModCodeHandleInputs& inputs) : code(code) {
++    is_good = code.num_functions == context.functions.size();
++    *code.base_event_index = inputs.base_event_index;
++    *code.reference_section_addresses = inputs.reference_section_addresses;
++}
++
++void recomp::mods::PrecompiledCodeHandle::set_imported_function(size_t import_index, GenericFunction func) {
++    std::visit(overloaded {
++        [this, import_index](recomp_func_t* native_func) {
++            code.imported_funcs[import_index] = native_func;
++        }
++    }, func);
++}
++
++recomp::mods::CodeModLoadError recomp::mods::PrecompiledCodeHandle::populate_reference_symbols(const N64Recomp::Context& context, std::string& error_param) {
++    return populate_reference_symbol_funcs(context, code.reference_symbol_funcs, error_param);
++}
++
+ recomp::mods::LiveRecompilerCodeHandle::LiveRecompilerCodeHandle(
+     const N64Recomp::Context& context, const ModCodeHandleInputs& inputs,
+     std::unordered_map<size_t, size_t>&& entry_func_hooks, std::unordered_map<size_t, size_t>&& return_func_hooks, std::vector<size_t>&& original_section_indices, bool regenerated)
+ {
++#ifdef IS_WASM
++    is_good = false;
++#else
+     if (!regenerated) {
+        section_addresses = std::make_unique<int32_t[]>(context.sections.size());
+     }
+@@ -529,8 +557,12 @@ recomp::mods::LiveRecompilerCodeHandle::LiveRecompilerCodeHandle(
+     // Emit the generated code and record whether the whole process succeeded.
+     recompiler_output = std::make_unique<N64Recomp::LiveGeneratorOutput>(generator.finish());
+     is_good = !recompile_failed && recompiler_output->good;
++#endif
+ }
+ 
++// Without a live recompiler a handle is never good, so the functions below are never called.
++#ifndef IS_WASM
++
+ void recomp::mods::LiveRecompilerCodeHandle::set_imported_function(size_t import_index, GenericFunction func) {
+     std::visit(overloaded {
+         [this, import_index](recomp_func_t* native_func) {
+@@ -564,8 +596,135 @@ recomp::mods::CodeModLoadError recomp::mods::LiveRecompilerCodeHandle::populate_
+ recomp::mods::GenericFunction recomp::mods::LiveRecompilerCodeHandle::get_function_handle(size_t func_index) {
+     return GenericFunction{ recompiler_output->functions[func_index] };
+ }
++#else
++void recomp::mods::LiveRecompilerCodeHandle::set_imported_function(size_t, GenericFunction) {}
++
++recomp::mods::CodeModLoadError recomp::mods::LiveRecompilerCodeHandle::populate_reference_symbols(const N64Recomp::Context&, std::string&) {
++    return CodeModLoadError::Good;
++}
++
++recomp::mods::GenericFunction recomp::mods::LiveRecompilerCodeHandle::get_function_handle(size_t) {
++    return GenericFunction{ static_cast<recomp_func_t*>(nullptr) };
++}
++
++// LiveRecomp, which generates these, isn't linked. Nothing creates one, but librecomp still names it.
++N64Recomp::LiveGeneratorOutput::~LiveGeneratorOutput() {}
++
++// A shim calls a function that takes a value (recomp_func_ext_t) from a call that passes none (recomp_func_t): the
++// config API given the calling mod's index, for one. LiveRecomp generates each one as code, so here they're the slots
++// of a fixed pool of functions, each of which calls what its slot holds. `code` points at the slot.
++namespace {
++    struct ShimSlot {
++        recomp_func_ext_t* func;
++        uintptr_t value;
++    };
++    constexpr size_t num_shim_slots = 1024;
++    ShimSlot shim_slots[num_shim_slots]{};
++    std::mutex shim_slots_mutex;
++
++    template <size_t index>
++    void shim_slot_func(uint8_t* rdram, recomp_context* ctx) {
++        shim_slots[index].func(rdram, ctx, shim_slots[index].value);
++    }
++
++    template <size_t... indices>
++    constexpr std::array<recomp_func_t*, sizeof...(indices)> make_shim_slot_funcs(std::index_sequence<indices...>) {
++        return { shim_slot_func<indices>... };
++    }
++    constexpr std::array<recomp_func_t*, num_shim_slots> shim_slot_funcs = make_shim_slot_funcs(std::make_index_sequence<num_shim_slots>{});
++}
++
++N64Recomp::ShimFunction::ShimFunction(recomp_func_ext_t* to_shim, uintptr_t value) : code(nullptr), func(nullptr) {
++    std::lock_guard lock{ shim_slots_mutex };
++    for (size_t i = 0; i < num_shim_slots; i++) {
++        if (shim_slots[i].func == nullptr) {
++            shim_slots[i] = ShimSlot{ to_shim, value };
++            code = &shim_slots[i];
++            func = shim_slot_funcs[i];
++            return;
++        }
++    }
++    assert(false && "Out of shim slots");
++}
++
++N64Recomp::ShimFunction::~ShimFunction() {
++    std::lock_guard lock{ shim_slots_mutex };
++    if (code != nullptr) {
++        static_cast<ShimSlot*>(code)->func = nullptr;
++    }
++}
++#endif
++
++#if defined(IS_WASM)
++// WebAssembly can't rewrite a function's code, so there a mod's replacement of a recompiled function (patch_func) and
++// the hooks the live recompiler would add to a copy of it are kept here, and every recompiled function asks at its entry
++// (RECOMP_FUNC_ENTRY in recomp.h): a byte per function table index, which is a function pointer's value, set for one
++// with a redirect, and what to run for it.
++extern "C" const uint8_t* recomp_redirected = nullptr;
++extern "C" uintptr_t recomp_redirected_count = 0;
++
++namespace {
++    struct Redirect {
++        recomp_func_t* replacement = nullptr;
++        size_t entry_hook = SIZE_MAX;
++        size_t return_hook = SIZE_MAX;
++    };
++    std::vector<uint8_t> redirected_funcs;
++    std::unordered_map<uintptr_t, Redirect> redirects;
++    // A hooked function that recomp_redirect has called, to run itself when its entry asks.
++    thread_local uintptr_t redirect_bypass = 0;
++
++    // Only while mods load, before the game's threads run.
++    Redirect& add_redirect(recomp_func_t* func) {
++        uintptr_t index = reinterpret_cast<uintptr_t>(func);
++        if (index >= redirected_funcs.size()) {
++            redirected_funcs.resize(index + 1);
++        }
++        redirected_funcs[index] = 1;
++        recomp_redirected = redirected_funcs.data();
++        recomp_redirected_count = redirected_funcs.size();
++        return redirects[index];
++    }
++
++    void reset_redirects() {
++        recomp_redirected_count = 0;
++        recomp_redirected = nullptr;
++        redirected_funcs.clear();
++        redirects.clear();
++    }
++}
++
++extern "C" int recomp_redirect(uint8_t* rdram, recomp_context* ctx, uintptr_t func) {
++    if (redirect_bypass == func) {
++        redirect_bypass = 0;
++        return 0;
++    }
++    auto find_it = redirects.find(func);
++    if (find_it == redirects.end()) {
++        return 0;
++    }
++    const Redirect& redirect = find_it->second;
++    if (redirect.entry_hook != SIZE_MAX) {
++        recomp::mods::run_hook(rdram, ctx, redirect.entry_hook);
++    }
++    if (redirect.replacement != nullptr) {
++        redirect.replacement(rdram, ctx);
++    }
++    else {
++        redirect_bypass = func;
++        reinterpret_cast<recomp_func_t*>(func)(rdram, ctx);
++    }
++    if (redirect.return_hook != SIZE_MAX) {
++        recomp::mods::run_hook(rdram, ctx, redirect.return_hook);
++    }
++    return 1;
++}
++#endif
+ 
+ void patch_func(recomp_func_t* target_func, recomp::mods::GenericFunction replacement_func) {
++#if defined(IS_WASM)
++    add_redirect(target_func).replacement = std::get<recomp_func_t*>(replacement_func);
++#else
+     uint8_t* target_func_u8 = reinterpret_cast<uint8_t*>(target_func);
+     size_t offset = 0;
+ 
+@@ -603,13 +762,20 @@ void patch_func(recomp_func_t* target_func, recomp::mods::GenericFunction replac
+ #endif
+ 
+     protect(target_func_u8, old_flags);
++#endif
+ }
+ 
+ void unpatch_func(void* target_func, const recomp::mods::PatchData& data) {
++#if defined(IS_WASM)
++    // unload_mods drops every redirect at once.
++    (void)target_func;
++    (void)data;
++#else
+     uint64_t old_flags;
+     unprotect(target_func, &old_flags);
+     memcpy(target_func, data.replaced_bytes.data(), data.replaced_bytes.size());
+     protect(target_func, old_flags);
++#endif
+ }
+ 
+ void recomp::mods::ModContext::add_opened_mod(ModManifest&& manifest, ConfigStorage&& config_storage, std::vector<size_t>&& game_indices, std::vector<ModContentTypeId>&& detected_content_types, std::vector<char>&& thumbnail) {
+@@ -650,6 +816,11 @@ void recomp::mods::ModContext::register_embedded_mod(const std::string &mod_id,
+     embedded_mod_bytes.emplace(mod_id, mod_bytes);
+ }
+ 
++void recomp::mods::ModContext::register_precompiled_mod(const recomp_precompiled_mod& code) {
++    precompiled_mods.emplace(code.hash, &code);
++}
++
++
+ void recomp::mods::ModContext::close_mods() {
+     std::unique_lock lock(opened_mods_mutex);
+     opened_mods_by_id.clear();
+@@ -1991,6 +2162,23 @@ std::vector<recomp::mods::ModLoadErrorDetails> build_regen_list(
+     return {};
+ }
+ 
++#if defined(IS_WASM)
++// In WebAssembly a hooked function isn't regenerated with its hooks: recomp_redirect runs them around it.
++void redirect_hooks(const RegeneratedList& regenlist) {
++    for (size_t func_index = 0; func_index < regenlist.func_ptrs.size(); func_index++) {
++        Redirect& redirect = add_redirect(regenlist.func_ptrs[func_index]);
++        auto find_entry_it = regenlist.entry_func_hooks.find(func_index);
++        if (find_entry_it != regenlist.entry_func_hooks.end()) {
++            redirect.entry_hook = find_entry_it->second;
++        }
++        auto find_return_it = regenlist.return_func_hooks.find(func_index);
++        if (find_return_it != regenlist.return_func_hooks.end()) {
++            redirect.return_hook = find_return_it->second;
++        }
++    }
++}
++#endif
++
+ std::unique_ptr<recomp::mods::LiveRecompilerCodeHandle> apply_regenlist(RegeneratedList& regenlist, std::span<const uint8_t> rom) {
+     using namespace recomp::mods;
+ 
+@@ -2058,6 +2246,9 @@ std::vector<recomp::mods::ModLoadErrorDetails> recomp::mods::ModContext::regener
+ 
+     // Regenerate and patch the ordinary (non-base-patched) functions.
+     if (!regenlist.functions.empty()) {
++#if defined(IS_WASM)
++        redirect_hooks(regenlist);
++#else
+         regenerated_code_handle = apply_regenlist(regenlist, decompressed_rom);
+         if (!regenerated_code_handle || !regenerated_code_handle->good()) {
+             regenerated_code_handle.reset();
+@@ -2066,6 +2257,7 @@ std::vector<recomp::mods::ModLoadErrorDetails> recomp::mods::ModContext::regener
+             });
+             return ret;
+         }
++#endif
+     }
+ 
+     if (!regenlist.patched_hooks.empty()) {
+@@ -2105,7 +2297,10 @@ std::vector<recomp::mods::ModLoadErrorDetails> recomp::mods::ModContext::regener
+             return ret;
+         }
+ 
+-        // Regenerate and patch the base-patched functions.
++        // Apply the patched function regenlist.
++#if defined(IS_WASM)
++        redirect_hooks(patch_regenlist);
++#else
+         base_patched_code_handle = apply_regenlist(patch_regenlist, overlays::get_patch_binary());
+         if (!base_patched_code_handle || !base_patched_code_handle->good()) {
+             regenerated_code_handle.reset();
+@@ -2115,6 +2310,7 @@ std::vector<recomp::mods::ModLoadErrorDetails> recomp::mods::ModContext::regener
+             });
+             return ret;
+         }
++#endif
+     }
+ 
+     return ret;
+@@ -2174,7 +2370,11 @@ recomp::mods::CodeModLoadError recomp::mods::ModContext::init_mod_code(uint8_t*
+ 
+     std::span<uint8_t> binary_span {reinterpret_cast<uint8_t*>(binary_data.data()), binary_data.size() };
+ 
+-    // Feed the symbol data into this mod's recompiler context.
++    // Use this mod's code recompiled ahead of time if the recomp has it.
++    auto find_precompiled_it = precompiled_mods.find(N64Recomp::mod_code_hash(binary_span, syms_data));
++    mod.precompiled_code = find_precompiled_it != precompiled_mods.end() ? find_precompiled_it->second : nullptr;
++
++    // Parse the symbol file into the recompiler context.
+     N64Recomp::ModSymbolsError symbol_load_error = N64Recomp::parse_mod_symbols(syms_data, binary_span, section_vrom_map, *mod.recompiler_context);
+     if (symbol_load_error != N64Recomp::ModSymbolsError::Good) {
+         return CodeModLoadError::FailedToParseSyms;
+@@ -2342,11 +2542,25 @@ recomp::mods::CodeModLoadError recomp::mods::ModContext::load_mod_code(uint8_t*
+         .reference_section_addresses = section_addresses,
+     };
+ 
+-    // A filename ending in ".offline.nrm" selects the dynamic-library handle. This
+-    // path is a developer aid (easier to debug than the live recompiler) rather than
+-    // something end users are expected to use.
+-    if (mod.manifest.mod_root_path.filename().string().ends_with(".offline.nrm")) {
+-        // The offline path can't synthesize hooks, so reject it when any replaced function is also hooked.
++    // Code recompiled ahead of time and linked in (register_precompiled_mod).
++    if (mod.precompiled_code != nullptr) {
++        // Hooks can't be added to it either.
++        if (!entry_func_hooks.empty() || !return_func_hooks.empty()) {
++            return CodeModLoadError::OfflineModHooked;
++        }
++
++        mod.code_handle = std::make_unique<PrecompiledCodeHandle>(*mod.precompiled_code, *mod.recompiler_context, handle_inputs);
++        if (!mod.code_handle->good()) {
++            mod.code_handle.reset();
++            error_param = mod.manifest.mod_id;
++            return CodeModLoadError::FailedToLoadNativeCode;
++        }
++    }
++    // Use a dynamic library code handle. This feature isn't meant to be used by end users, but provides a more debuggable
++    // experience than the live recompiler for mod developers.
++    // Enabled if the mod's filename ends with ".offline.nrm".
++    else if (mod.manifest.mod_root_path.filename().string().ends_with(".offline.nrm")) {
++        // Hooks can't be generated for native mods, so return an error if any of the functions this mod replaces are also hooked by another mod.
+         if (!entry_func_hooks.empty() || !return_func_hooks.empty()) {
+             return CodeModLoadError::OfflineModHooked;
+         }
+@@ -2608,7 +2822,9 @@ recomp::mods::CodeModLoadError recomp::mods::ModContext::resolve_code_dependenci
+ 
+         // Stash the original bytes so the patch can be reverted when the mod unloads.
+         PatchData& cur_replacement_data = patched_funcs[to_replace];
++#if !defined(IS_WASM)
+         memcpy(cur_replacement_data.replaced_bytes.data(), reinterpret_cast<void*>(to_replace), cur_replacement_data.replaced_bytes.size());
++#endif
+         cur_replacement_data.mod_id = mod.manifest.mod_id;
+ 
+         // Overwrite the original with a trampoline to the replacement.
+@@ -2623,6 +2839,9 @@ void recomp::mods::ModContext::unload_mods() {
+         unpatch_func(reinterpret_cast<void*>(replacement_func), replacement_data);
+     }
+     patched_funcs.clear();
++#if defined(IS_WASM)
++    reset_redirects();
++#endif
+     loaded_mods_by_id.clear();
+     hook_slots.clear();
+     processed_hook_slots.clear();
+diff --git a/librecomp/src/overlays.cpp b/librecomp/src/overlays.cpp
+index feaf220..b5ea080 100644
+--- a/librecomp/src/overlays.cpp
++++ b/librecomp/src/overlays.cpp
+@@ -253,7 +253,36 @@ static uint32_t frag_range_erase(uint32_t base, uint32_t size) {
+ // reloads at a DIFFERENT base, the prior instance is superseded under the current single-latest
+ // dispatch model, so its whole runtime range is unregistered (turns stale-wrong-code into a
+ // visible miss; Phase 2/3 will instead keep prior live instances dispatchable by range).
+-static std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> s_frag_live_range{};
++static std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, uint32_t>>> s_frag_live_range{};
++// Erases (from func_map) and forgets the live instances of `id` that overlap [base, base+size) at another base; returns
++// how many entries were erased. Instances elsewhere in RDRAM stay registered: they are still resident and running.
++static uint32_t frag_supersede_overlapping(uint32_t id, uint32_t base, uint32_t size) {
++    auto it = s_frag_live_range.find(id);
++    if (it == s_frag_live_range.end()) return 0;
++    uint32_t erased = 0;
++    auto& live = it->second;
++    for (auto r = live.begin(); r != live.end();) {
++        const bool overlaps = r->first < base + size && base < r->first + r->second;
++        if (r->first != base && overlaps) {
++            const uint32_t n = frag_range_erase(r->first, r->second);
++            if (n) {
++                fprintf(stderr, "[frag-unreg] id=%u superseded 0x%08X(size0x%X): erased %u stale func_map entries (new base 0x%08X, overlapping)\n",
++                        id, r->first, r->second, n, base);
++                fflush(stderr);
++            }
++            erased += n;
++            r = live.erase(r);
++        } else if (r->first == base) {
++            r = live.erase(r);
++        } else {
++            ++r;
++        }
++    }
++    return erased;
++}
++static void frag_live_add(uint32_t id, uint32_t base, uint32_t size) {
++    s_frag_live_range[id].emplace_back(base, size);
++}
+ }  // anon namespace
+ 
+ // Forward declarations — definitions live further down with the rest
+@@ -943,7 +972,7 @@ static uint64_t fnv1a_64(const uint8_t* data, size_t len) {
+ // fitting Stadium's ~279 unique pattern variants with headroom for
+ // future games.
+ static constexpr uint32_t kSyntheticPoolBase  = 0xC0000000u;
+-static constexpr uint32_t kSyntheticPoolEnd   = 0xE0000000u;
++static constexpr uint32_t kSyntheticPoolEnd   = 0xE8B00000u; // 651 buckets: Stadium 2's frag_8FF00000 variants (slot 651, frag_81000000's id-0 variant, untested upstream and crashes battles, stays out)
+ static constexpr uint32_t kSyntheticPoolStride = 0x00100000u;
+ static constexpr size_t   kSyntheticBucketCount =
+     (kSyntheticPoolEnd - kSyntheticPoolBase) / kSyntheticPoolStride; // 512
+@@ -1205,18 +1234,10 @@ void recomp::overlays::register_runtime_fragment(uint8_t* rdram, uint32_t id, in
+     auto leave_unregistered = [&]() {
+         evict_prior_at_base((size_t)-1);
+         if (frag_unreg_enabled()) {
+-            auto prev = s_frag_live_range.find(id);
+-            if (prev != s_frag_live_range.end() && prev->second.first != (uint32_t)fragment_ptr) {
+-                uint32_t erased = frag_range_erase(prev->second.first, prev->second.second);
+-                if (erased) {
+-                    fprintf(stderr, "[frag-unreg] id=%u superseded 0x%08X(size0x%X): erased %u stale func_map entries (no-bind new base 0x%08X)\n",
+-                            id, prev->second.first, prev->second.second, erased, (uint32_t)fragment_ptr);
+-                    fflush(stderr);
+-                }
+-            }
++            frag_supersede_overlapping(id, (uint32_t)fragment_ptr, frag_size_in_ram ? frag_size_in_ram : 1);
+         }
+         if (frag_size_in_ram != 0) {
+-            s_frag_live_range[id] = { (uint32_t)fragment_ptr, frag_size_in_ram };
++            frag_live_add(id, (uint32_t)fragment_ptr, frag_size_in_ram);
+         }
+     };
+ 
+@@ -1544,15 +1565,7 @@ void recomp::overlays::register_runtime_fragment(uint8_t* rdram, uint32_t id, in
+     // function-start / trampoline / interior-entry aliases can't resolve to old code under the
+     // new section base. (Same-base reload just overwrites the same keys; no stale residue.)
+     if (frag_unreg_enabled()) {
+-        auto prev = s_frag_live_range.find(id);
+-        if (prev != s_frag_live_range.end() && prev->second.first != (uint32_t)fragment_ptr) {
+-            uint32_t erased = frag_range_erase(prev->second.first, prev->second.second);
+-            if (erased) {
+-                fprintf(stderr, "[frag-unreg] id=%u superseded 0x%08X(size0x%X): erased %u stale func_map entries (new base 0x%08X)\n",
+-                        id, prev->second.first, prev->second.second, erased, (uint32_t)fragment_ptr);
+-                fflush(stderr);
+-            }
+-        }
++        frag_supersede_overlapping(id, (uint32_t)fragment_ptr, (uint32_t)section.size);
+     }
+ 
+     // Register every FuncEntry at both the runtime address and the
+@@ -1578,7 +1591,7 @@ void recomp::overlays::register_runtime_fragment(uint8_t* rdram, uint32_t id, in
+ 
+     // Issue #9 Phase 1: record this instance's live runtime range so the NEXT load of this id
+     // at a different base can supersede-unregister it (above).
+-    s_frag_live_range[id] = { (uint32_t)fragment_ptr, (uint32_t)section.size };
++    frag_live_add(id, (uint32_t)fragment_ptr, (uint32_t)section.size);
+ 
+     // Per-variant synthetic-vram registration: if this section has a
+     // synthetic link identity (ram_addr in the synthetic pool), populate
+@@ -3569,6 +3582,12 @@ static const std::string& tcc_toolchain_dir() {
+ static recomp_func_t* codegen_function(N64Recomp::Context& ctx, uint32_t vram,
+                                        JitEntry& entry_out, size_t* out_code_size,
+                                        std::string& err) {
++#if defined(__EMSCRIPTEN__)
++    // WebAssembly can't run code made at run time: no libtcc tier, the interpreter floor runs it instead.
++    (void)ctx; (void)vram; (void)entry_out; (void)out_code_size;
++    err = "no JIT in WebAssembly";
++    return nullptr;
++#endif
+     using namespace N64Recomp;
+     // Bind every host runtime helper the CGenerator output can call. All are
+     // CODE symbols (tcc_add_symbol resolves them); the lone DATA symbol,
+diff --git a/librecomp/src/recomp.cpp b/librecomp/src/recomp.cpp
+index 342dff4..dddc557 100644
+--- a/librecomp/src/recomp.cpp
++++ b/librecomp/src/recomp.cpp
+@@ -98,7 +98,9 @@ bool recomp::register_game(const recomp::GameEntry& entry) {
+ }
+ 
+ void recomp::mods::initialize_mods() {
++#ifndef __EMSCRIPTEN__
+     N64Recomp::live_recompiler_init();
++#endif
+     std::filesystem::create_directories(config_path / mods_directory);
+     std::filesystem::create_directories(config_path / mod_config_directory);
+     mod_context->set_mods_config_path(config_path / "mods.json");
+@@ -110,6 +112,12 @@ void recomp::mods::register_embedded_mod(const std::string &mod_id, std::span<co
+     mod_context->register_embedded_mod(mod_id, mod_bytes);
+ }
+ 
++void recomp::mods::register_precompiled_mod(const recomp_precompiled_mod& code) {
++    std::lock_guard<std::mutex> lock(mod_context_mutex);
++    mod_context->register_precompiled_mod(code);
++}
++
++
+ void recomp::mods::scan_mods() {
+     std::vector<recomp::mods::ModOpenErrorDetails> mod_open_errors;
+     {
+diff --git a/ultramodern/CMakeLists.txt b/ultramodern/CMakeLists.txt
+index 1278ba4..aee3eae 100644
+--- a/ultramodern/CMakeLists.txt
++++ b/ultramodern/CMakeLists.txt
+@@ -40,3 +40,10 @@ target_compile_options(ultramodern PRIVATE
+ if (WIN32)
+     add_compile_definitions(NOMINMAX)
+ endif()
++
++# osStopThread on another thread, and osStartThread on a thread stopped while it waited on a message queue, as libultra
++# does them (threads.cpp); without it, stopping another thread asserts.
++option(ULTRAMODERN_LIBULTRA_THREAD_STOP "osStopThread/osStartThread on another thread as libultra does them (always on with Emscripten)" OFF)
++if (ULTRAMODERN_LIBULTRA_THREAD_STOP OR EMSCRIPTEN)
++    target_compile_definitions(ultramodern PRIVATE ULTRAMODERN_LIBULTRA_THREAD_STOP=1)
++endif()
+diff --git a/ultramodern/include/ultramodern/renderer_context.hpp b/ultramodern/include/ultramodern/renderer_context.hpp
+index 43032ea..a213a4e 100644
+--- a/ultramodern/include/ultramodern/renderer_context.hpp
++++ b/ultramodern/include/ultramodern/renderer_context.hpp
+@@ -54,7 +54,7 @@ namespace ultramodern {
+             auto operator<=>(const WindowHandle&) const = default;
+         };
+ // TODO add a native window handle option here (Display/Window for x11 and ANativeWindow for Android) as a compile-time option.
+-#elif defined(__linux__) || defined(__ANDROID__)
++#elif defined(__linux__) || defined(__ANDROID__) || defined(__EMSCRIPTEN__)
+         using WindowHandle = SDL_Window*;
+ #elif defined(__APPLE__)
+         struct WindowHandle {
+@@ -84,6 +84,7 @@ namespace ultramodern {
+ 
+                 virtual void enable_instant_present() = 0;
+                 virtual void send_dl(const OSTask* task) = 0;
++                virtual void send_dummy_workload(uint32_t fb_address) { (void)fb_address; }
+                 virtual void update_screen() = 0;
+                 virtual void shutdown() = 0;
+                 virtual uint32_t get_display_framerate() const = 0;
+diff --git a/ultramodern/include/ultramodern/ultra64.h b/ultramodern/include/ultramodern/ultra64.h
+index 31eb106..50e8244 100644
+--- a/ultramodern/include/ultramodern/ultra64.h
++++ b/ultramodern/include/ultramodern/ultra64.h
+@@ -103,6 +103,11 @@ typedef struct OSThread_t {
+     uint16_t state;
+     OSId id;
+     int32_t pad3;
++#if UINTPTR_MAX == UINT32_MAX
++    // libultra's thprof, which a game may write (Banjo-Tooie does, creating its threads). A 64-bit host's pointer is
++    // aligned past it; a 32-bit one's (wasm) would sit here without this.
++    int32_t pad4;
++#endif
+     UltraThreadContext* context; // An actual pointer regardless of platform
+     int32_t sp;
+ } OSThread;
+diff --git a/ultramodern/src/threads.cpp b/ultramodern/src/threads.cpp
+index bea3b12..19b8397 100644
+--- a/ultramodern/src/threads.cpp
++++ b/ultramodern/src/threads.cpp
+@@ -107,6 +107,15 @@ void ultramodern::set_native_thread_name(const std::string& name) {
+     pthread_setname_np(name.c_str());
+ }
+ 
++void ultramodern::set_native_thread_priority(ThreadPriority pri) {}
++#elif defined(__EMSCRIPTEN__)
++#include <emscripten/threading.h>
++
++void ultramodern::set_native_thread_name(const std::string& name) {
++    emscripten_set_thread_name(pthread_self(), name.c_str());
++}
++
++// Web workers have no priorities.
+ void ultramodern::set_native_thread_priority(ThreadPriority pri) {}
+ #endif
+ 
+@@ -225,8 +234,27 @@ extern "C" void osStartThread(RDRAM_ARG PTR(OSThread) t_) {
+     debug_printf("[os] Start Thread %d\n", t->id);
+ 
+     if (thread_self) {
++#if ULTRAMODERN_LIBULTRA_THREAD_STOP
++        // Only a stopped thread can be started (libultra ignores the call otherwise).
++        if (t->state != OSThreadState::STOPPED) {
++            return;
++        }
++        // A thread stopped by another thread while it was blocked on a message queue goes back on that queue,
++        // and the queue's first waiter is made runnable so that it rechecks the queue, like libultra does.
++        // Messages that arrived while the thread was stopped are picked up that way.
++        if (t->queue != NULLPTR && t->queue != ultramodern::running_queue) {
++            PTR(PTR(OSThread)) waiting_queue = t->queue;
++            ultramodern::thread_queue_insert(PASS_RDRAM waiting_queue, t_);
++            t->state = OSThreadState::BLOCKED;
++            ultramodern::schedule_running_thread(PASS_RDRAM ultramodern::thread_queue_pop(PASS_RDRAM waiting_queue));
++        }
++        else {
++            ultramodern::schedule_running_thread(PASS_RDRAM t_);
++        }
++#else
+         // Invoked from inside a game thread: enqueue and let the scheduler decide.
+         ultramodern::schedule_running_thread(PASS_RDRAM t_);
++#endif
+         ultramodern::check_running_queue(PASS_RDRAM1);
+     }
+     else {
+@@ -278,9 +306,28 @@ extern "C" void osStopThread(RDRAM_ARG PTR(OSThread) t_) {
+     if (t_ == thread_self) {
+         ultramodern::run_next_thread_and_wait(PASS_RDRAM1);
+     }
++#if ULTRAMODERN_LIBULTRA_THREAD_STOP
++    // Stopping another thread: it is either waiting in the running queue or blocked on a message queue (only one
++    // game thread runs at a time). Take it off that queue so nothing schedules it until osStartThread, but keep
++    // t->queue so that osStartThread can put a blocked thread back where it was waiting.
++    else {
++        OSThread* t = TO_PTR(OSThread, t_);
++        if (t->state == OSThreadState::STOPPED) {
++            return;
++        }
++        if (t->queue != NULLPTR) {
++            ultramodern::thread_queue_remove(PASS_RDRAM t->queue, t_);
++        }
++        if (t->queue == ultramodern::running_queue) {
++            t->queue = NULLPTR;
++        }
++        t->state = OSThreadState::STOPPED;
++    }
++#else
+     else {
+         assert(false);
+     }
++#endif
+ }
+ 
+ extern "C" void osDestroyThread(RDRAM_ARG PTR(OSThread) t_) {

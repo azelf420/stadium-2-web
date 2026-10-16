@@ -1,0 +1,518 @@
+diff --git a/OfflineModRecomp/main.cpp b/OfflineModRecomp/main.cpp
+index 4152df0..f2d4ffd 100644
+--- a/OfflineModRecomp/main.cpp
++++ b/OfflineModRecomp/main.cpp
+@@ -2,6 +2,7 @@
+ #include <fstream>
+ #include <vector>
+ #include <span>
++#include <cstring>
+ 
+ #include "recompiler/context.h"
+ #include "rabbitizer.hpp"
+@@ -28,8 +29,16 @@ static std::vector<uint8_t> slurp_file(const std::filesystem::path& path, bool&
+ }
+ 
+ int main(int argc, const char** argv) {
+-    if (argc != 5) {
+-        printf("Usage: %s [mod symbol file] [mod binary file] [recomp symbols file] [output C file]\n", argv[0]);
++    // With --static <name>, the output is for linking into the recomp's executable instead of a DLL: for a platform
++    // without the live recompiler (WebAssembly), where the mod can only run as code compiled with the recomp. It
++    // includes recomp.h, keeps everything file-local but `const recomp_precompiled_mod <name>`, which the recomp
++    // registers with the runtime (recomp::mods::register_precompiled_mod), and calls the runtime's functions directly.
++    const char* static_name = nullptr;
++    if (argc == 7 && strcmp(argv[5], "--static") == 0) {
++        static_name = argv[6];
++    }
++    else if (argc != 5) {
++        printf("Usage: %s [mod symbol file] [mod binary file] [recomp symbols file] [output C file] [--static <name>]\n", argv[0]);
+         return EXIT_SUCCESS;
+     }
+ 
+@@ -141,10 +150,21 @@ int main(int argc, const char** argv) {
+     RabbitizerConfig_Cfg.pseudos.pseudoNot = false;
+     RabbitizerConfig_Cfg.pseudos.pseudoBal = false;
+ 
+-    output_file << "#include \"mod_recomp.h\"\n\n";
++    const char* storage = static_name ? "static" : "RECOMP_EXPORT";
++    if (static_name) {
++        output_file << "#include \"recomp.h\"\n\n";
++        output_file << "#undef RECOMP_FUNC\n#define RECOMP_FUNC static\n\n";
++        output_file << "void recomp_trigger_event(uint8_t* rdram, recomp_context* ctx, uint32_t event_index);\n\n";
++    }
++    else {
++        output_file << "#include \"mod_recomp.h\"\n\n";
++
++        // Write the API version.
++        output_file << "RECOMP_EXPORT uint32_t recomp_api_version = 1;\n\n";
++    }
+ 
+-    // Write the API version.
+-    output_file << "RECOMP_EXPORT uint32_t recomp_api_version = 1;\n\n";
++    // A mod's own functions are never replaced or hooked through RECOMP_FUNC_ENTRY (recomp.h).
++    output_file << "#undef RECOMP_FUNC_ENTRY\n#define RECOMP_FUNC_ENTRY(func)\n\n";
+ 
+     output_file << "// Values populated by the runtime:\n\n";
+ 
+@@ -157,7 +177,7 @@ int main(int argc, const char** argv) {
+         output_file << "#define " << import.base.name << " imported_funcs[" << import_index << "]\n";
+     }
+ 
+-    output_file << "RECOMP_EXPORT recomp_func_t* imported_funcs[" << std::max(size_t{1}, num_imports) << "] = {0};\n";
++    output_file << storage << " recomp_func_t* imported_funcs[" << std::max(size_t{1}, num_imports) << "] = {0};\n";
+     output_file << "\n";
+ 
+     // Scan the relocs to emit the reference-symbol pointer table plus aliasing
+@@ -188,8 +208,10 @@ int main(int argc, const char** argv) {
+ 
+     // Write provided event array (maps internal event indices to global ones).
+     output_file << "// Base global event index for this mod's events.\n";
+-    output_file << "RECOMP_EXPORT uint32_t base_event_index;\n\n";
++    output_file << storage << " uint32_t base_event_index;\n\n";
+ 
++    // The static form calls the runtime's own functions, which a DLL is given pointers to.
++    if (!static_name) {
+     // Write the event trigger function pointer.
+     output_file << "// Pointer to the runtime function for triggering events.\n";
+     output_file << "RECOMP_EXPORT void (*recomp_trigger_event)(uint8_t* rdram, recomp_context* ctx, uint32_t) = NULL;\n\n";
+@@ -213,15 +235,27 @@ int main(int argc, const char** argv) {
+     // Write the do_break pointer.
+     output_file << "// Pointer to the runtime function for handling the break instruction.\n";
+     output_file << "RECOMP_EXPORT void (*do_break)(uint32_t vram) = NULL;\n\n";
++    }
+ 
+     // Write the section_addresses pointer.
+     output_file << "// Pointer to the runtime's array of loaded section addresses for the base ROM.\n";
+-    output_file << "RECOMP_EXPORT int32_t* reference_section_addresses = NULL;\n\n";
++    output_file << storage << " int32_t* reference_section_addresses = NULL;\n\n";
++    if (static_name) {
++        output_file << "#define REF_RELOC_HI16(section_index, offset) HI16(reference_section_addresses[section_index] + (offset))\n";
++        output_file << "#define REF_RELOC_LO16(section_index, offset) LO16(reference_section_addresses[section_index] + (offset))\n\n";
++    }
+ 
+     // Write the local section addresses pointer array.
+     size_t num_sections = mod_context.sections.size();
+     output_file << "// Array of this mod's loaded section addresses.\n";
+-    output_file << "RECOMP_EXPORT int32_t section_addresses[" << std::max(size_t{1}, num_sections) << "] = {0};\n\n";
++    if (static_name) {
++        // recomp.h's section_addresses are the base ROM's, and RELOC_HI16/LO16 name them.
++        output_file << "static int32_t mod_section_addresses[" << std::max(size_t{1}, num_sections) << "] = {0};\n";
++        output_file << "#define section_addresses mod_section_addresses\n\n";
++    }
++    else {
++        output_file << "RECOMP_EXPORT int32_t section_addresses[" << std::max(size_t{1}, num_sections) << "] = {0};\n\n";
++    }
+ 
+     // Collect the exported function indices so the naming pass leaves their
+     // symbol-file names intact.
+diff --git a/include/recomp.h b/include/recomp.h
+index 90fb35d..213a4a9 100644
+--- a/include/recomp.h
++++ b/include/recomp.h
+@@ -351,6 +351,43 @@ static inline void do_sdr(uint8_t* rdram, gpr offset, gpr reg, gpr val) {
+     MEM_W(0, dword_address + 0) = hi;
+ }
+ 
++#if defined(__wasm__)
++// WebAssembly only rounds to nearest, and its fesetround accepts every mode and changes nothing. So the mode the game
++// sets is kept here, per thread as the host's would be, and the conversions that take the current mode (cvt.w, cvt.l)
++// apply it themselves. Arithmetic still rounds to nearest whatever the mode.
++#ifdef __cplusplus
++#define RECOMP_THREAD_LOCAL thread_local
++#else
++#define RECOMP_THREAD_LOCAL _Thread_local
++#endif
++__attribute__((weak)) RECOMP_THREAD_LOCAL uint32_t recomp_rounding_mode = 0;
++
++static inline uint32_t get_cop1_cs() {
++    return recomp_rounding_mode;
++}
++
++static inline void set_cop1_cs(uint32_t val) {
++    recomp_rounding_mode = val & 0x3;
++}
++
++static inline float recomp_round_s(float val) {
++    switch (recomp_rounding_mode) {
++        case 1: return truncf(val);
++        case 2: return ceilf(val);
++        case 3: return floorf(val);
++        default: return rintf(val);
++    }
++}
++
++static inline double recomp_round_d(double val) {
++    switch (recomp_rounding_mode) {
++        case 1: return trunc(val);
++        case 2: return ceil(val);
++        case 3: return floor(val);
++        default: return rint(val);
++    }
++}
++#else
+ static inline uint32_t get_cop1_cs() {
+     uint32_t rounding_mode = 0;
+     switch (fegetround()) {
+@@ -394,6 +431,7 @@ static inline void set_cop1_cs(uint32_t val) {
+     }
+     fesetround(round);
+ }
++#endif
+ 
+ #define S32(val) \
+     ((int32_t)(val))
+@@ -452,32 +490,48 @@ static inline void set_cop1_cs(uint32_t val) {
+ #define DEFAULT_ROUNDING_MODE 0
+ 
+ static inline int32_t do_cvt_w_s(float val) {
+-    // float -> 32-bit int honoring the current rounding mode.
++    // Rounding mode aware float to 32-bit int conversion.
++#if defined(__wasm__)
++    return (int32_t)recomp_round_s(val);
++#else
+     return (int32_t)lrintf(val);
++#endif
+ }
+ 
+ #define CVT_W_S(val) \
+     do_cvt_w_s(val)
+ 
+ static inline int64_t do_cvt_l_s(float val) {
+-    // float -> 64-bit int honoring the current rounding mode.
++    // Rounding mode aware float to 64-bit int conversion.
++#if defined(__wasm__)
++    return (int64_t)recomp_round_s(val);
++#else
+     return (int64_t)llrintf(val);
++#endif
+ }
+ 
+ #define CVT_L_S(val) \
+     do_cvt_l_s(val);
+ 
+ static inline int32_t do_cvt_w_d(double val) {
+-    // double -> 32-bit int honoring the current rounding mode.
++    // Rounding mode aware double to 32-bit int conversion.
++#if defined(__wasm__)
++    return (int32_t)recomp_round_d(val);
++#else
+     return (int32_t)lrint(val);
++#endif
+ }
+ 
+ #define CVT_W_D(val) \
+     do_cvt_w_d(val)
+ 
+ static inline int64_t do_cvt_l_d(double val) {
+-    // double -> 64-bit int honoring the current rounding mode.
++    // Rounding mode aware double to 64-bit int conversion.
++#if defined(__wasm__)
++    return (int64_t)recomp_round_d(val);
++#else
+     return (int64_t)llrint(val);
++#endif
+ }
+ 
+ #define CVT_L_D(val) \
+@@ -719,6 +773,57 @@ void recomp_register_runtime_fragment(uint8_t *rdram, uint32_t id,
+                                        int32_t fragment_ptr);
+ void recomp_unregister_runtime_fragment(uint32_t id);
+ void pms_diag_script_dispatch(uint8_t *rdram, recomp_context *ctx);
++#if defined(__wasm__)
++// A mod replaces or hooks a recompiled function by rewriting its machine code (N64ModernRuntime's patch_func), which
++// WebAssembly can't do, so there every recompiled function asks at its entry instead. A function pointer is an index
++// into the function table, and recomp_redirected has a byte for each index below recomp_redirected_count, set for a
++// function a mod replaces or hooks; recomp_redirect then runs the replacement or the hooks around the function and
++// returns nonzero, or returns 0 when the function is to run itself (as it is called from those hooks). Without mods
++// the count is 0, and the check is one comparison.
++extern const uint8_t* recomp_redirected;
++extern uintptr_t recomp_redirected_count;
++int recomp_redirect(uint8_t* rdram, recomp_context* ctx, uintptr_t func);
++// A function's table index, hidden from the optimizer: clang (24) folds a function's address used as an array index
++// into the load's offset, and the linker fills that in with the function's index in the module, not its table index.
++static inline uintptr_t recomp_table_index(uintptr_t func) {
++    __asm__("" : "+r"(func));
++    return func;
++}
++#define RECOMP_FUNC_ENTRY(func) \
++    { \
++        uintptr_t recomp_entry_index = recomp_table_index((uintptr_t)&func); \
++        if (recomp_entry_index < recomp_redirected_count && recomp_redirected[recomp_entry_index] && \
++            recomp_redirect(rdram, ctx, recomp_entry_index)) return; \
++    }
++#else
++#define RECOMP_FUNC_ENTRY(func)
++#endif
++
++// What comes before a tail call, a call to another function as this one's last act (a MIPS j or jr out of it), which
++// the recompiled C writes as the call and a return. Natively the optimizer turns that into a jump. In WebAssembly it
++// stays a call, so a game whose code chains tail calls without end overflows the browser's stack (Conker's Bad Fur
++// Day after minutes of play), unless it is a return_call: with the tail call feature (-mtail-call, which every
++// browser with WebGPU has) this forces one. Without it the call stays a plain one. The empty statement keeps the
++// attribute off a label just before it, which would take it as its own.
++#if defined(__wasm_tail_call__)
++#define RECOMP_TAIL_CALL ; __attribute__((musttail)) return
++#else
++#define RECOMP_TAIL_CALL
++#endif
++
++// A mod's code recompiled ahead of time into C (OfflineModRecomp --static) and linked into the executable, for a
++// platform without the live recompiler (WebAssembly). The runtime uses it, through the pointers here, for a mod whose
++// mod_binary.bin and mod_syms.bin hash to `hash` (N64Recomp::mod_code_hash), in place of recompiling the mod.
++typedef struct {
++    uint64_t hash;
++    size_t num_functions;
++    recomp_func_t* const* functions;      // in the order of the mod's symbol file
++    recomp_func_t** imported_funcs;
++    recomp_func_t** reference_symbol_funcs;
++    uint32_t* base_event_index;
++    int32_t** reference_section_addresses;
++    int32_t* section_addresses;           // the mod's own
++} recomp_precompiled_mod;
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/include/recompiler/context.h b/include/recompiler/context.h
+index 56bdda0..f7af919 100644
+--- a/include/recompiler/context.h
++++ b/include/recompiler/context.h
+@@ -6,6 +6,7 @@
+ #include <cstdint>
+ #include <utility>
+ #include <vector>
++#include <set>
+ #include <unordered_map>
+ #include <unordered_set>
+ #include <filesystem>
+@@ -280,6 +281,10 @@ namespace N64Recomp {
+         //// Only used by the CLI, TODO move this to a struct in the internal headers.
+         // A mapping of function name to index in the functions vector
+         std::unordered_map<std::string, size_t> functions_by_name;
++        // Every function the C output calls by name (CGenerator records them), so that funcs.h can declare the ones it
++        // doesn't define: the runtime's replacements and ignored functions. Without a declaration C guesses `int f()`,
++        // which x86-64 tolerates and WebAssembly turns into a trap when it links.
++        mutable std::set<std::string> called_functions;
+ 
+         //// Mod dependencies and their symbols
+ 
+@@ -438,6 +443,16 @@ namespace N64Recomp {
+             return true;
+         }
+ 
++        // Gives a function's reference symbol a new name to call it by, keeping the name it is found by.
++        bool rename_reference_function(const std::string& symbol_name, const std::string& new_name) {
++            SymbolReference ref;
++            if (!find_regular_reference_symbol(symbol_name, ref) || !reference_symbols[ref.symbol_index].is_function) {
++                return false;
++            }
++            reference_symbols[ref.symbol_index].name = new_name;
++            return true;
++        }
++
+         // Resolve a reference symbol, dispatching to the import/event lists for
+         // the special section indices.
+         const ReferenceSymbol& get_reference_symbol(uint16_t section_index, size_t symbol_index) const {
+@@ -653,6 +668,11 @@ namespace N64Recomp {
+     ModSymbolsError parse_mod_symbols(std::span<const char> data, std::span<const uint8_t> binary, const std::unordered_map<uint32_t, uint16_t>& sections_by_vrom, Context& context_out);
+     std::vector<uint8_t> symbols_to_bin_v1(const Context& mod_context);
+ 
++    // Identifies a mod's code: FNV-1a 64 of its mod_binary.bin and then its mod_syms.bin. A mod recompiled ahead of
++    // time (OfflineModRecomp --static) carries the hash of the files it was made from, and the runtime uses that code
++    // only for a mod whose files hash the same.
++    uint64_t mod_code_hash(std::span<const uint8_t> binary, std::span<const char> syms);
++    
+     inline bool is_manual_patch_symbol(uint32_t vram) {
+         // Zero-sized symbols between 0x8F000000 and 0x90000000 are manually specified symbols for use with patches.
+         // TODO make this configurable or come up with a more sensible solution for dealing with manual symbols for patches.
+diff --git a/src/analysis.cpp b/src/analysis.cpp
+index 3a69581..381086a 100644
+--- a/src/analysis.cpp
++++ b/src/analysis.cpp
+@@ -355,14 +355,33 @@ bool N64Recomp::analyze_function(const N64Recomp::Context& context, const N64Rec
+             end_address = stats.jump_tables[i + 1].vram;
+         }
+ 
+-        // TODO this assumes that the jump table is in the same section as the function itself
+-        cur_jtbl.rom = cur_jtbl.vram + func.rom - func.vram;
++        // The jump table is read at the function's ROM offset, as if it were in the function's own section, unless
++        // another section loaded beside it holds its address: GoldenEye keeps every jump table in a .rodata section of
++        // its own. A section overlapping the function's in memory is an overlay that is never loaded with it (Rush 2049's
++        // two overlays share their addresses, and a table just past the end of one lies inside the other).
+         cur_jtbl.section_index = func.section_index;
++        uint32_t jtbl_rom_offset = func.rom - func.vram;
++        const N64Recomp::Section& func_section = context.sections[func.section_index];
++        if (cur_jtbl.vram < func_section.ram_addr || cur_jtbl.vram >= func_section.ram_addr + func_section.size) {
++            for (size_t section_index = 0; section_index < context.sections.size(); section_index++) {
++                const N64Recomp::Section& section = context.sections[section_index];
++                bool overlaps_func_section = section.ram_addr < func_section.ram_addr + func_section.size &&
++                    func_section.ram_addr < section.ram_addr + section.size;
++                if (!overlaps_func_section && cur_jtbl.vram >= section.ram_addr && cur_jtbl.vram < section.ram_addr + section.size) {
++                    cur_jtbl.section_index = static_cast<uint16_t>(section_index);
++                    jtbl_rom_offset = section.rom_addr - section.ram_addr;
++                    break;
++                }
++            }
++        }
++        cur_jtbl.rom = cur_jtbl.vram + jtbl_rom_offset;
+ 
+         while (vram < end_address) {
+             // Retrieve the current entry of the jump table
+-            // TODO same as above
+-            uint32_t rom_addr = vram + func.rom - func.vram;
++            uint32_t rom_addr = vram + jtbl_rom_offset;
++            if (rom_addr + sizeof(uint32_t) > context.rom.size()) {
++                break;
++            }
+             uint32_t jtbl_word = byteswap(*reinterpret_cast<const uint32_t*>(&context.rom[rom_addr]));
+ 
+             if (cur_jtbl.got_offset.has_value() && got_ram_addr.has_value()) {
+diff --git a/src/cgenerator.cpp b/src/cgenerator.cpp
+index b5d1287..f149cce 100644
+--- a/src/cgenerator.cpp
++++ b/src/cgenerator.cpp
+@@ -386,8 +386,10 @@ void N64Recomp::CGenerator::emit_function_start(const std::string& function_name
+         "RECOMP_FUNC void {}(uint8_t* rdram, recomp_context* ctx) {{\n"
+         // these variables shouldn't need to be preserved across function boundaries, so make them local for more efficient output
+         "    uint64_t hi = 0, lo = 0, result = 0;\n"
+-        "    int c1cs = 0;\n", // cop1 conditional signal
+-        function_name);
++        "    int c1cs = 0;\n" // cop1 conditional signal
++        // where a mod's replacement or hooks of this function run in WebAssembly, which can't rewrite its code (recomp.h)
++        "    RECOMP_FUNC_ENTRY({})\n",
++        function_name, function_name);
+ }
+ 
+ void N64Recomp::CGenerator::emit_function_end() const {
+@@ -463,6 +465,8 @@ void N64Recomp::CGenerator::emit_function_call_by_register(int reg, const std::s
+ void N64Recomp::CGenerator::emit_function_call_reference_symbol(const Context& context, uint16_t section_index, size_t symbol_index, uint32_t target_section_offset, const std::set<uint32_t>& local_labels, uint32_t return_vram) const {
+     (void)target_section_offset;
+     const N64Recomp::ReferenceSymbol& sym = context.get_reference_symbol(section_index, symbol_index);
++    // funcs.h declares every name the output calls (WebAssembly traps on an undeclared call's guessed signature).
++    context.called_functions.insert(sym.name);
+     emit_call_prologue(output_file);
+     fmt::print(output_file, "    {}(rdram, ctx);\n", sym.name);
+     emit_tailcall_handling(local_labels, return_vram);
+@@ -470,6 +474,7 @@ void N64Recomp::CGenerator::emit_function_call_reference_symbol(const Context& c
+ }
+ 
+ void N64Recomp::CGenerator::emit_function_call(const Context& context, size_t function_index, const std::set<uint32_t>& local_labels, uint32_t return_vram) const {
++    context.called_functions.insert(context.functions[function_index].name);
+     emit_call_prologue(output_file);
+     fmt::print(output_file, "    {}(rdram, ctx);\n", context.functions[function_index].name);
+     emit_tailcall_handling(local_labels, return_vram);
+diff --git a/src/main.cpp b/src/main.cpp
+index 8a9a705..5f84397 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -1908,6 +1908,13 @@ int main(int argc, char** argv) {
+         config.recomp_include
+     );
+ 
++    // What funcs.h has declared, so that its end can declare what the output calls but doesn't define.
++    std::unordered_set<std::string> declared_funcs{};
++    auto declare_function = [&func_header_file, &declared_funcs](const std::string& name) {
++        fmt::print(func_header_file, "void {}(uint8_t* rdram, recomp_context* ctx);\n", name);
++        declared_funcs.insert(name);
++    };
++
+     std::vector<std::vector<uint32_t>> static_funcs_by_section{ context.sections.size() };
+     seed_static_entrypoints_from_code_relocs(context, static_funcs_by_section);
+     seed_static_entrypoints_from_pointer_tables(context, static_funcs_by_section);
+@@ -1942,9 +1949,17 @@ int main(int argc, char** argv) {
+ 
+     // Apply the config's rename requests.
+     for (const std::string& renamed_func : config.renamed_funcs) {
+-        // Reject unknown names so config mistakes don't pass silently.
++        // A patch's call to a base game function that the config renames (GoldenEye's strtol, which clashes with the C
++        // library's) goes through its reference symbol, so that is renamed too, keeping the name it is looked up by.
++        bool renamed_reference = context.rename_reference_function(renamed_func, renamed_func + "_recomp");
++        // Check if the specified function exists.
+         auto func_find = context.functions_by_name.find(renamed_func);
+         if (func_find == context.functions_by_name.end()) {
++            if (renamed_reference) {
++                continue;
++            }
++            // Function doesn't exist, present an error to the user instead of silently failing to rename it.
++            // This helps prevent typos in the config file or functions renamed between versions from causing issues.
+             exit_failure(fmt::format("Function {} is set as renamed in the config file but does not exist!", renamed_func));
+         }
+         // Suffix the existing name with "_recomp".
+@@ -2172,8 +2187,7 @@ int main(int argc, char** argv) {
+         const auto& func = context.functions[i];
+ 
+         if (!func.ignored && func.words.size() != 0) {
+-            fmt::print(func_header_file,
+-                "void {}(uint8_t* rdram, recomp_context* ctx);\n", func.name);
++            declare_function(func.name);
+             bool result;
+             const auto& func_section = context.sections[func.section_index];
+             // In strict patch mode, a patch-section function and a reference
+@@ -2222,8 +2236,7 @@ int main(int argc, char** argv) {
+                 std::exit(EXIT_FAILURE);
+             }
+         } else if (func.reimplemented) {
+-            fmt::print(func_header_file,
+-                       "void {}(uint8_t* rdram, recomp_context* ctx);\n", func.name);
++            declare_function(func.name);
+         }
+     }
+ 
+@@ -2416,8 +2429,7 @@ int main(int argc, char** argv) {
+             context.functions_by_vram[static_func_addr].push_back(new_func_index);
+             const N64Recomp::Function& new_func = context.functions[new_func_index];
+ 
+-            fmt::print(func_header_file,
+-                       "void {}(uint8_t* rdram, recomp_context* ctx);\n", new_func.name);
++            declare_function(new_func.name);
+ 
+             bool result;
+             size_t prev_num_statics = static_funcs_by_section[new_func.section_index].size();
+@@ -2714,8 +2726,7 @@ int main(int argc, char** argv) {
+             for (const auto& manual_patch_sym_entry : manual_patch_syms) {
+                 fmt::print(overlay_file, "    {{ 0x{:08X}, {} }},\n", manual_patch_sym_entry.first, manual_patch_sym_entry.second);
+ 
+-                fmt::print(func_header_file,
+-                    "void {}(uint8_t* rdram, recomp_context* ctx);\n", manual_patch_sym_entry.second);
++                declare_function(manual_patch_sym_entry.second);
+             }
+             // Terminating sentinel so the array always has a nonzero length.
+             fmt::print(overlay_file, "    {{ 0, NULL }}\n");
+@@ -2723,6 +2734,19 @@ int main(int argc, char** argv) {
+         }
+     }
+ 
++    // Declare what the output calls but doesn't define: the runtime's replacements of libultra functions, ignored
++    // functions, reference symbols and the event trigger. C lets such a call go undeclared and guesses `int f()`, which
++    // x86-64 tolerates and WebAssembly links to a trap.
++    for (const std::string& name : context.called_functions) {
++        if (!declared_funcs.contains(name)) {
++            declare_function(name);
++        }
++    }
++    // Events come from a mod's event symbols, or from the patches' own declared events (function_index_to_event_index).
++    if (!context.event_symbols.empty() || !function_index_to_event_index.empty()) {
++        fmt::print(func_header_file, "void recomp_trigger_event(uint8_t* rdram, recomp_context* ctx, uint32_t event_index);\n");
++    }
++
+     fmt::print(func_header_file,
+         "\n"
+         "#ifdef __cplusplus\n"
+diff --git a/src/mod_symbols.cpp b/src/mod_symbols.cpp
+index 62cd79c..d6bce2a 100644
+--- a/src/mod_symbols.cpp
++++ b/src/mod_symbols.cpp
+@@ -832,3 +832,14 @@ std::vector<uint8_t> N64Recomp::symbols_to_bin_v1(const N64Recomp::Context& cont
+ 
+     return ret;
+ }
++
++uint64_t N64Recomp::mod_code_hash(std::span<const uint8_t> binary, std::span<const char> syms) {
++    uint64_t hash = 0xCBF29CE484222325ULL;
++    for (uint8_t byte : binary) {
++        hash = (hash ^ byte) * 0x100000001B3ULL;
++    }
++    for (char byte : syms) {
++        hash = (hash ^ static_cast<uint8_t>(byte)) * 0x100000001B3ULL;
++    }
++    return hash;
++}

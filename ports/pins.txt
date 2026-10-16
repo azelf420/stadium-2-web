@@ -1,0 +1,9 @@
+# <name> <folder under games/> <repository> <commit>   (written by tools/export_patches.sh)
+stadium2 stadium2 https://github.com/michiiik/pokemonStadiumGSRecomp.git d165b81d59abd6b03c3ba9d0f6a02819bb9bffdf
+stadium2-n64recomp stadium2/n64recomp https://github.com/michiiik/N64Recomp.git 2b949c5c3f1c41dd76023e7626a6302a4a262a8a
+stadium2-runtime stadium2/lib/N64ModernRuntime https://github.com/michiiik/N64ModernRuntime.git f61d542428313f753366cc28114f838b31e913f0
+stadium2-runtime-n64recomp stadium2/lib/N64ModernRuntime/N64Recomp https://github.com/michiiik/N64Recomp.git e46bf9ddfb72a8ed9de940f129bcf705ef046972
+n64recomp-browser stadium2/lib/N64Recomp-browser https://github.com/amazingalek/N64Recomp-browser a6ea767590cd11276e02e06b40a58851e3343b66
+rt64 rt64 https://github.com/rt64/rt64 5473732a822a4423b5696e7cb18fecc425a59875
+plume rt64/src/contrib/plume https://github.com/renderbag/plume.git d890ac899e505fb30040e037a4037cdeca68f033
+hlslpp rt64/src/contrib/hlslpp https://github.com/redorav/hlslpp 6f5274c66132e8f951c400103d897582b8f21491

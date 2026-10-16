@@ -1,0 +1,69 @@
+diff --git a/include/hlsl++/platforms/wasm.h b/include/hlsl++/platforms/wasm.h
+index 343d716..3774b4a 100644
+--- a/include/hlsl++/platforms/wasm.h
++++ b/include/hlsl++/platforms/wasm.h
+@@ -70,7 +70,7 @@ typedef __i64x2 n128d;
+ #define _hlslpp_movelh_ps(x, y)					wasm_i32x4_shuffle((x), (y), 0, 1, 4, 5)
+ 
+ // Equivalent to shuffle(y, x, Z, W, Z, W)
+-#define _hlslpp_movehl_ps(x, y)					wasm_i32x4_shuffle((x), (y), 2, 3, 6, 7)
++#define _hlslpp_movehl_ps(x, y)					wasm_i32x4_shuffle((y), (x), 2, 3, 6, 7)
+ 
+ // Equivalent to shuffle(x, x, Y, Y, W, W)
+ #define _hlslpp_movehdup_ps(x)					wasm_i32x4_shuffle((x), (x), 1, 1, 7, 7)
+@@ -88,7 +88,7 @@ hlslpp_inline n128 _hlslpp_dot4_ps(n128 x, n128 y)
+ 	n128 mul    = wasm_f32x4_mul(x, y);                      // Multiply components
+ 	n128 shuf   = wasm_i32x4_shuffle(mul, mul, 1, 0, 3, 0);  // Move y into x, and w into z (ignore the rest)
+ 	n128 add    = wasm_f32x4_add(shuf, mul);                 // Contains x+y, _, z+w, _
+-	shuf        = wasm_i32x4_shuffle(shuf, add, 2, 0, 0, 0); // Move (z + w) into x
++	shuf        = wasm_i32x4_shuffle(add, add, 2, 0, 0, 0);  // Move (z + w) into x
+ 	n128 result = wasm_f32x4_add(add, shuf);                 // Contains x+y+z+w, _, _, _
+ 	return result;
+ }
+@@ -271,8 +271,18 @@ hlslpp_inline void _hlslpp_load4x4_ps(float* p, n128& x0, n128& x1, n128& x2, n1
+ #define _hlslpp_slli_epi32(x, y)				wasm_i32x4_shl((x), (y))
+ #define _hlslpp_srli_epi32(x, y)				wasm_i32x4_shr((x), (y))
+ 
+-#define _hlslpp_sllv_epi32(x, y)				(x) // _mm_sllv_epi32((x), (y))
+-#define _hlslpp_srlv_epi32(x, y)				(x) // _mm_srlv_epi32((x), (y))
++// WebAssembly has no shift by a count per lane, so shift each lane on its own
++hlslpp_inline n128i _hlslpp_sllv_epi32(n128i x, n128i y)
++{
++	return wasm_i32x4_make(wasm_i32x4_extract_lane(x, 0) << wasm_i32x4_extract_lane(y, 0), wasm_i32x4_extract_lane(x, 1) << wasm_i32x4_extract_lane(y, 1),
++		wasm_i32x4_extract_lane(x, 2) << wasm_i32x4_extract_lane(y, 2), wasm_i32x4_extract_lane(x, 3) << wasm_i32x4_extract_lane(y, 3));
++}
++
++hlslpp_inline n128i _hlslpp_srlv_epi32(n128i x, n128i y)
++{
++	return wasm_i32x4_make(wasm_i32x4_extract_lane(x, 0) >> wasm_i32x4_extract_lane(y, 0), wasm_i32x4_extract_lane(x, 1) >> wasm_i32x4_extract_lane(y, 1),
++		wasm_i32x4_extract_lane(x, 2) >> wasm_i32x4_extract_lane(y, 2), wasm_i32x4_extract_lane(x, 3) >> wasm_i32x4_extract_lane(y, 3));
++}
+ 
+ hlslpp_inline bool _hlslpp_any1_epi32(n128i x)
+ {
+@@ -351,7 +361,7 @@ hlslpp_inline void _hlslpp_load2_epi32(int32_t* p, n128i& x)
+ 
+ hlslpp_inline void _hlslpp_load3_epi32(int32_t* p, n128i& x)
+ {
+-	x = wasm_i32x4_shuffle(wasm_v128_load64_lane(p, x, 0), wasm_v128_load32_lane(p, x, 2), 0, 1, 3, 4);
++	x = wasm_i32x4_shuffle(wasm_v128_load64_lane(p, x, 0), wasm_v128_load32_lane(p + 2, x, 0), 0, 1, 4, 5);
+ }
+ 
+ hlslpp_inline void _hlslpp_load4_epi32(int32_t* p, n128i& x)
+@@ -398,10 +408,14 @@ hlslpp_inline void _hlslpp_load4_epi32(int32_t* p, n128i& x)
+ #define _hlslpp_cvtepu32_ps(x)					_hlslpp_cvtepi32_ps((x))
+ 
+ #define _hlslpp_slli_epu32(x, y)				_hlslpp_slli_epi32((x), (y))
+-#define _hlslpp_srli_epu32(x, y)				_hlslpp_srli_epi32((x), (y))
++#define _hlslpp_srli_epu32(x, y)				wasm_u32x4_shr((x), (y))
+ 
+ #define _hlslpp_sllv_epu32(x, y)				_hlslpp_sllv_epi32((x), (y))
+-#define _hlslpp_srlv_epu32(x, y)				_hlslpp_srlv_epi32((x), (y))
++hlslpp_inline n128u _hlslpp_srlv_epu32(n128u x, n128u y)
++{
++	return wasm_u32x4_make(wasm_u32x4_extract_lane(x, 0) >> wasm_u32x4_extract_lane(y, 0), wasm_u32x4_extract_lane(x, 1) >> wasm_u32x4_extract_lane(y, 1),
++		wasm_u32x4_extract_lane(x, 2) >> wasm_u32x4_extract_lane(y, 2), wasm_u32x4_extract_lane(x, 3) >> wasm_u32x4_extract_lane(y, 3));
++}
+ 
+ #define _hlslpp_any1_epu32(x)					_hlslpp_any1_epi32(x)
+ #define _hlslpp_any2_epu32(x)					_hlslpp_any2_epi32(x)
