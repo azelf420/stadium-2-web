@@ -357,19 +357,36 @@ index 1450565..047ddd9 100644
  
  #if defined(__GNUC__) && !defined(__clang__) && !defined(__INTEL_COMPILER)
 diff --git a/src/common/rt64_thread.cpp b/src/common/rt64_thread.cpp
-index c4b080b..a7de6b4 100644
+index c4b080b..cbbed06 100644
 --- a/src/common/rt64_thread.cpp
 +++ b/src/common/rt64_thread.cpp
-@@ -12,6 +12,8 @@
+@@ -12,6 +12,9 @@
  #   include "utf8conv/utf8conv.h"
  #elif defined(__linux__)
  #   include <pthread.h>
 +#elif defined(__EMSCRIPTEN__)
 +#   include <emscripten/threading.h>
++#   include <emscripten/em_asm.h>
  #endif
  
  namespace RT64 {
-@@ -47,6 +49,8 @@ namespace RT64 {
+@@ -39,6 +42,15 @@ namespace RT64 {
+ 
+     // Thread
+ 
++    bool Thread::lightDevice() {
++#   if defined(__EMSCRIPTEN__)
++        static const bool light = MAIN_THREAD_EM_ASM_INT({ return globalThis.n64webLight ? 1 : 0; }) != 0;
++        return light;
++#   else
++        return false;
++#   endif
++    }
++
+     void Thread::setCurrentThreadName(const std::string &str) {
+ #   if defined(_WIN32)
+         std::wstring nameWide = win32::Utf8ToUtf16(str);
+@@ -47,6 +59,8 @@ namespace RT64 {
          pthread_setname_np(pthread_self(), str.c_str());
  #   elif defined(__APPLE__)
          pthread_setname_np(str.c_str());
@@ -378,7 +395,7 @@ index c4b080b..a7de6b4 100644
  #   else
          static_assert(false, "Unimplemented");
  #   endif
-@@ -55,7 +59,7 @@ namespace RT64 {
+@@ -55,7 +69,7 @@ namespace RT64 {
      void Thread::setCurrentThreadPriority(Priority priority) {
  #   if defined(_WIN32)
          SetThreadPriority(GetCurrentThread(), toWindowsPriority(priority));
@@ -387,6 +404,21 @@ index c4b080b..a7de6b4 100644
          // On Linux, thread priorities can't be changed under the default scheduler policy (SCHED_OTHER) and the other policies
          // that are available without root privileges are lower priority. Instead you can set the thread's "nice" value, which ranges
          // from -20 to 19 (lower being higher priority). However, by strict POSIX spec "nice" is meant to be per-process instead of
+diff --git a/src/common/rt64_thread.h b/src/common/rt64_thread.h
+index e7d8c5f..4e70ecf 100644
+--- a/src/common/rt64_thread.h
++++ b/src/common/rt64_thread.h
+@@ -19,6 +19,10 @@ namespace RT64 {
+         };
+ 
+         static void setCurrentThreadName(const std::string &str);
++
++        // A page on a phone, a tablet or a weak computer (the page's globalThis.n64webLight): fewer threads.
++        // Always false outside a browser.
++        static bool lightDevice();
+         static void setCurrentThreadPriority(Priority priority);
+         static void sleepMilliseconds(uint32_t millis);
+     };
 diff --git a/src/common/rt64_tmem_hasher.h b/src/common/rt64_tmem_hasher.h
 index 8c6af2b..35f38ad 100644
 --- a/src/common/rt64_tmem_hasher.h
@@ -1769,6 +1801,49 @@ index 5a331aa..b225845 100644
                  std::unique_lock<std::mutex> threadLock(threadMutex);
                  Workload &workload = workloads[processCursor];
                  ext.presentQueue->waitForPresentId(workload.presentId);
+diff --git a/src/render/rt64_buffer_uploader.cpp b/src/render/rt64_buffer_uploader.cpp
+index de997a0..a841429 100644
+--- a/src/render/rt64_buffer_uploader.cpp
++++ b/src/render/rt64_buffer_uploader.cpp
+@@ -29,14 +29,19 @@ namespace RT64 {
+ 
+         this->device = device;
+         workAvailable = false;
+-        thread = new std::thread(&BufferUploader::threadLoop, this);
++        // On a page every thread is a web worker with memory of its own, and RT64 has a dozen uploaders: on a light
++        // device (Thread::lightDevice) each one copies its uploads in submit(), on the caller's thread, which waits
++        // for them right after anyway.
++        thread = Thread::lightDevice() ? nullptr : new std::thread(&BufferUploader::threadLoop, this);
+     }
+ 
+     BufferUploader::~BufferUploader() {
+         running = false;
+         workCondition.notify_all();
+-        thread->join();
+-        delete thread;
++        if (thread != nullptr) {
++            thread->join();
++            delete thread;
++        }
+     }
+ 
+     void BufferUploader::threadLoop() {
+@@ -112,6 +117,15 @@ namespace RT64 {
+             std::unique_lock<std::mutex> queueLock(workMutex);
+             pendingUploads = uploads;
+             updateResources(worker, pendingUploads);
++            if (thread == nullptr) {
++                for (const Upload &u : pendingUploads) {
++                    threadUpload(u);
++                }
++
++                workAvailable = false;
++                return;
++            }
++
+             workAvailable = true;
+         }
+ 
 diff --git a/src/render/rt64_descriptor_sets.h b/src/render/rt64_descriptor_sets.h
 index 69a82ac..1dd31f7 100644
 --- a/src/render/rt64_descriptor_sets.h
@@ -2828,7 +2903,7 @@ index 3b991ff..f7a5889 100644
          static std::unique_ptr<RenderPipeline> createPipeline(const PipelineCreation &c);
          static RenderMultisampling generateMultisamplingPattern(uint32_t sampleCount, bool sampleLocationsSupported);
 diff --git a/src/render/rt64_raster_shader_cache.cpp b/src/render/rt64_raster_shader_cache.cpp
-index bf7b669..e9a70c7 100644
+index bf7b669..4e5575f 100644
 --- a/src/render/rt64_raster_shader_cache.cpp
 +++ b/src/render/rt64_raster_shader_cache.cpp
 @@ -6,6 +6,51 @@
@@ -2908,7 +2983,7 @@ index bf7b669..e9a70c7 100644
      }
  
      void RasterShaderCache::setup(RenderDevice *device, RenderShaderFormat shaderFormat, const ShaderLibrary *shaderLibrary, const RenderMultisampling &multisampling) {
-@@ -105,13 +159,485 @@ namespace RT64 {
+@@ -105,13 +159,486 @@ namespace RT64 {
          shaderUber = std::make_unique<RasterShaderUber>(device, shaderFormat, multisampling, shaderLibrary, ubershaderThreadCount);
          usesHDR = shaderLibrary->usesHDR;
  
@@ -3075,7 +3150,8 @@ index bf7b669..e9a70c7 100644
 +            }
 +        }
 +
-+        const uint32_t threads = std::clamp(std::thread::hardware_concurrency(), 2U, 16U);
++        // A page's threads are web workers, each with memory of its own: on a light device 2 build them.
++        const uint32_t threads = Thread::lightDevice() ? 2U : std::clamp(std::thread::hardware_concurrency(), 2U, 16U);
 +        prebuildBootThreads = std::max(threads / 2, 1U);
 +        {
 +            std::unique_lock<std::mutex> lock(prebuildMutex);
@@ -3395,7 +3471,7 @@ index bf7b669..e9a70c7 100644
          {
              std::unique_lock<std::mutex> queueLock(submissionMutex);
  
-@@ -125,6 +651,22 @@ namespace RT64 {
+@@ -125,6 +652,22 @@ namespace RT64 {
              found = true;
          }
  
@@ -3418,7 +3494,7 @@ index bf7b669..e9a70c7 100644
          // Push a new shader compilation to the queue.
          {
              const std::unique_lock<std::mutex> queueLock(descQueueMutex);
-@@ -165,6 +707,18 @@ namespace RT64 {
+@@ -165,6 +708,18 @@ namespace RT64 {
          const std::unique_lock<std::mutex> lock(GPUShadersMutex);
          auto shaderIt = GPUShaders.find(shaderHash);
          if (shaderIt == GPUShaders.end()) {

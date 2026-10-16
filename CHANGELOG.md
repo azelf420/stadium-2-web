@@ -9,6 +9,8 @@ What changed and how it was tested. Measurements come from headless Chrome on an
   (161 MB in battle). The game runs byte for byte the same (454 of 454 checkpoints).
 - The ROM is no longer copied into the browser's storage by the runtime and read back when the game starts: two
   64 MB copies fewer at that moment, the one where phones run out of memory.
+- Phones, tablets and weak computers run with fewer threads (29 instead of 48): every thread of a page is a web
+  worker with memory of its own, and the renderer had a dozen just to copy data to the GPU.
 - GRAPHICS option in the panel: LIGHT (the N64's own resolution), NORMAL (twice) and HIGH (the screen's). It changes
   while playing. Phones, tablets and computers with little memory start on LIGHT.
 

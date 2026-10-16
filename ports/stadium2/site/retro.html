@@ -283,7 +283,10 @@
   (function () {
     let q = null;
     try { q = localStorage.getItem('n64web-quality'); } catch (e) {}
-    const weak = matchMedia('(pointer: coarse)').matches || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
+    const weak = matchMedia('(pointer: coarse)').matches || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4
+      || new URLSearchParams(location.search).get('light') === '1';
+    // A light device also gets fewer threads from the renderer (each one a web worker with memory of its own).
+    globalThis.n64webLight = weak;
     globalThis.n64webQuality = q === '0' || q === '1' || q === '2' ? +q : (weak ? 0 : 1);
     document.getElementById('n64-gfx').textContent = n64Text['gfx' + globalThis.n64webQuality];
   })();
