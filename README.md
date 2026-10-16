@@ -22,12 +22,23 @@ Done:
 - [x] Side panel with the controls, in Portuguese or English depending on the browser
 - [x] **Online mode** (first version): 2 players over the internet, by a room code
 - [x] Graphics option (light, normal, high) and much less memory (about 160 MB in use instead of 1.2 GB)
+- [x] **Light engine** (WebGL2): runs without WebGPU, for phones and weak computers; picked automatically there
 
 In progress:
 - [ ] Online mode tested between two homes and through a whole battle
 - [ ] Pokémon pictures in the rental list (see `STATUS.md`)
 
 Not tested yet: Gym Leader Castle, mini games, GB Tower, Firefox, Safari, phones.
+
+## Two graphics engines
+
+- **FULL** (RT64, WebGPU): the default on a computer with WebGPU.
+- **LIGHT** (n64gl, WebGL2, `ports/n64gl`): written for this port, for phones, tablets, weak computers and any
+  browser without WebGPU, where it is picked automatically. It draws the same display lists with WebGL2: the vertex
+  work and the console's texture memory in JavaScript on the game's graphics thread, the drawing on the page's
+  thread. The game runs byte for byte the same with either engine, so online play works with both.
+
+The panel's OPTIONS switch between them (the game restarts).
 
 ## Online mode
 

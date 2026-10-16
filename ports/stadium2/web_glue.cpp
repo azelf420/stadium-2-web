@@ -67,12 +67,21 @@ namespace pkmnstadium::ares_worker {
     void post_job(std::function<void()> job) { job(); }
 }
 
+namespace n64gl {
+    bool wanted();
+    std::unique_ptr<ultramodern::renderer::RendererContext> create_renderer(uint8_t* rdram);
+}
+
 namespace pokestadium::renderer {
     std::unique_ptr<ultramodern::renderer::RendererContext>
     create_render_context(uint8_t* rdram, ultramodern::renderer::WindowHandle, bool) {
 #ifdef N64WEB_DET
         n64web_det_start();
 #endif
+        // The light renderer (ports/n64gl, WebGL2) when the page asks for it; RT64 (WebGPU) otherwise.
+        if (n64gl::wanted()) {
+            return n64gl::create_renderer(rdram);
+        }
 #ifdef N64WEB_DET
         // Render to RAM writes each drawn frame back into RDRAM whenever the GPU finishes it, so its timing differs between
         // two machines. The game's logic doesn't read its frames back, so lockstep builds leave it off.

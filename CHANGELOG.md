@@ -2,6 +2,16 @@
 
 What changed and how it was tested. Measurements come from headless Chrome on an Apple M1 unless said otherwise.
 
+## Light engine (WebGL2)
+- A second graphics engine, n64gl (`ports/n64gl`), draws the game with WebGL2 instead of WebGPU, so the port runs
+  in browsers and devices without WebGPU. It reads each display list on the game's graphics thread (vertex work,
+  lights, fog, the console's texture memory byte for byte) and draws it on the page's thread with generated shaders
+  for the color combiner. Intro, title, menus, team select and battles are drawn right; render-to-texture effects
+  and mipmaps are not done yet.
+- The game runs byte for byte the same as with RT64 (401 of 401 checkpoints), so online play is unaffected.
+- In battle it advances frames faster than RT64 on the test machine (52-55 a second against 38-47).
+- Picked automatically on phones, tablets, weak computers and without WebGPU; OPTIONS > ENGINE switches by hand.
+
 ## Lighter
 - The runtime's 1 GB memory region for the console was zeroed page by page when the game started, so each player
   paid 1 GB of real memory for a console that has 8 MB. It is now taken from memory nobody has written, which the

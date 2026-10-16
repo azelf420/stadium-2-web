@@ -16,3 +16,5 @@ Each project keeps its own license. The patches in this repository change GPL-3.
 
 Pokémon Stadium 2 is a trademark of its owners. This project is not affiliated with or endorsed by them, and it
 contains no game data.
+- [noclip.website](https://github.com/magcius/noclip.website) (MIT): its N64 code (`src/Common/N64`) is the reference
+  for the light renderer's combiner and blender tables and texel formats.

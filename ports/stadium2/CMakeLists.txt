@@ -91,6 +91,7 @@ add_executable(PokemonStadiumGSRecomp
     ${S2}/rsp/njpgdspMain.cpp
     ${PORT_DIR}/web_glue.cpp
     ${PORT_DIR}/web_det.cpp
+    ${PORT_DIR}/../n64gl/gl_renderer.cpp
 )
 target_include_directories(PokemonStadiumGSRecomp PRIVATE
     ${S2}/include ${S2}/src/main ${S2}/generated_web
@@ -107,6 +108,9 @@ target_link_libraries(PokemonStadiumGSRecomp PRIVATE RecompiledFuncs librecomp u
 # Neutral file names on the web: game.html, game.js, game.wasm, game.data.
 set_target_properties(PokemonStadiumGSRecomp PROPERTIES OUTPUT_NAME game)
 n64recomp_browser_frontend_page(PokemonStadiumGSRecomp)
+# n64gl, the light WebGL2 renderer (ports/n64gl): its page side runs on the page's thread.
+target_link_options(PokemonStadiumGSRecomp PRIVATE "SHELL:--pre-js ${PORT_DIR}/../n64gl/n64gl.js")
+set_property(TARGET PokemonStadiumGSRecomp APPEND PROPERTY LINK_DEPENDS ${PORT_DIR}/../n64gl/n64gl.js)
 target_link_options(PokemonStadiumGSRecomp PRIVATE
     "SHELL:--preload-file ${S2}/assets@/assets"
     -sINITIAL_MEMORY=1536MB)

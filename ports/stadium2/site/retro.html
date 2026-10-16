@@ -121,7 +121,7 @@
       }
       url = q || localStorage.getItem('n64web-rom') || '';
     } catch (e) {}
-    if (!window.crossOriginIsolated || !navigator.gpu || !window.indexedDB && !url) return;
+    if (!window.crossOriginIsolated || !(navigator.gpu || window.WebGL2RenderingContext) || !window.indexedDB && !url) return;
     const pt = /^pt/i.test(navigator.language || '');
     // Frames the page has drawn (each present asks the canvas for a texture): how the start-up line below knows the
     // game is on screen.
@@ -157,11 +157,12 @@
       const tick = setInterval(() => {
         const st = document.getElementById('status');
         if (!st || st.style.color) { clearInterval(tick); return; }
-        if (frames > 60) { st.textContent = ''; clearInterval(tick); return; }
+        const shown = frames + (globalThis.n64glFrames || 0);   // WebGPU presents, or n64gl's (WebGL2)
+        if (shown > 60) { st.textContent = ''; clearInterval(tick); return; }
         const took = globalThis.n64webRom === null;
         const shaders = document.getElementById('shaders');
         const prep = shaders && !shaders.hidden ? (shaders.querySelector('.figures') || {}).textContent || '…' : (took ? '✓' : '…');
-        const steps = [['ROM', true], [pt ? 'jogo' : 'game', took], [pt ? 'gráficos' : 'graphics', prep], [pt ? 'imagem' : 'picture', frames > 0]]
+        const steps = [['ROM', true], [pt ? 'jogo' : 'game', took], [pt ? 'gráficos' : 'graphics', prep], [pt ? 'imagem' : 'picture', shown > 0]]
           .map(([name, v]) => name + ' ' + (v === true ? '✓' : v === false ? '…' : v));
         const secs = Math.round((performance.now() - t0) / 1000);
         if (secs < 240) { st.textContent = (pt ? 'Iniciando o jogo' : 'Starting the game') + ` (${secs} s): ` + steps.join(' · '); return; }
@@ -242,6 +243,7 @@
   </fieldset>
 
   <fieldset><legend>&#9733; <span data-t="options"></span> &#9733;</legend>
+    <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Engine()">&#9881; <span data-t="engine"></span>: <span id="n64-engine"></span></button>
     <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Quality()">&#9881; <span data-t="gfx"></span>: <span id="n64-gfx"></span></button>
     <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Full()">&#9974; <span data-t="full"></span></button>
     <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Panel(false)">&#9668; <span data-t="hide"></span></button>
@@ -257,14 +259,14 @@
   const n64Text = {
     pt: { panel: 'PAINEL',
           controls: 'CONTROLES', trigger: 'gatilho', space: 'Espaço', dpad: 'Direcional', stick: 'Analógico',
-          options: 'OPÇÕES', gfx: 'GRÁFICOS', gfx0: 'LEVE', gfx1: 'NORMAL', gfx2: 'ALTO', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
+          options: 'OPÇÕES', engine: 'MOTOR', engineGl: 'LEVE', engineRt: 'COMPLETO', reloadengine: 'Trocando o motor gráfico. O jogo vai reiniciar...', gfx: 'GRÁFICOS', gfx0: 'LEVE', gfx1: 'NORMAL', gfx2: 'ALTO', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
           online: 'MODO ONLINE', new: 'NOVO!', create: 'CRIAR SALA', join: 'ENTRAR', code: 'CÓDIGO', name: 'SEU NOME',
           reloadroom: 'O jogo vai reiniciar pra entrar na sala. Aguarde...', reloadleave: 'Saindo da sala. O jogo vai reiniciar...',
           onlinenote: 'Batalha de 2 jogadores pela internet. Quem cria a sala é o jogador 1 e passa o código pro amigo. O jogo começa do zero nos dois.',
           rom: 'Traga sua própria ROM. Nenhum arquivo do jogo fica neste site.' },
     en: { panel: 'PANEL',
           controls: 'CONTROLS', trigger: 'trigger', space: 'Space', dpad: 'D-Pad', stick: 'Stick',
-          options: 'OPTIONS', gfx: 'GRAPHICS', gfx0: 'LIGHT', gfx1: 'NORMAL', gfx2: 'HIGH', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
+          options: 'OPTIONS', engine: 'ENGINE', engineGl: 'LIGHT', engineRt: 'FULL', reloadengine: 'Switching the graphics engine. The game restarts...', gfx: 'GRAPHICS', gfx0: 'LIGHT', gfx1: 'NORMAL', gfx2: 'HIGH', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
           online: 'ONLINE MODE', new: 'NEW!', create: 'CREATE ROOM', join: 'JOIN', code: 'CODE', name: 'YOUR NAME',
           reloadroom: 'The game restarts to enter the room. Please wait...', reloadleave: 'Leaving the room. The game restarts...',
           onlinenote: '2 player battles over the internet. Whoever creates the room is player 1 and gives the code to a friend. The game starts over on both.',
@@ -273,6 +275,8 @@
   document.documentElement.lang = n64Lang === 'pt' ? 'pt-BR' : 'en';
   window.addEventListener('DOMContentLoaded', () => {
     const st = document.getElementById('status');
+    // Without WebGPU the page plays on the LIGHT engine (WebGL2): the shell's "no WebGPU" doesn't apply.
+    if (st && globalThis.n64webRenderer === 'gl' && /WebGPU/.test(st.textContent)) { st.textContent = ''; st.style.color = ''; return; }
     if (!st || !st.style.color || n64Lang !== 'pt') return;
     if (/no WebGPU/.test(st.textContent)) st.textContent = 'Este navegador não tem WebGPU. No computador use Chrome ou Edge atualizado; no celular, Chrome atualizado no Android ou Safari no iOS 26.';
     else if (/cross-origin isolation/.test(st.textContent)) st.textContent = 'Recarregue a página uma vez (a página precisa se reabrir para liberar as threads do jogo).';
@@ -293,6 +297,7 @@
     globalThis.n64webQuality = (globalThis.n64webQuality + 1) % 3;
     try { localStorage.setItem('n64web-quality', String(globalThis.n64webQuality)); } catch (e) {}
     if (typeof Module !== 'undefined' && Module._n64web_set_quality) Module._n64web_set_quality(globalThis.n64webQuality);
+    if (globalThis.n64gl && n64gl.setQuality) n64gl.setQuality(globalThis.n64webQuality);
     document.getElementById('n64-gfx').textContent = n64Text['gfx' + globalThis.n64webQuality];
   }
   (function () {
@@ -302,9 +307,21 @@
       || new URLSearchParams(location.search).get('light') === '1';
     // A light device also gets fewer threads from the renderer (each one a web worker with memory of its own).
     globalThis.n64webLight = weak;
+    // The graphics engine, chosen before the game starts: LIGHT is n64gl (WebGL2, ports/n64gl), FULL is RT64 (WebGPU).
+    // LIGHT on light devices and wherever the browser has no WebGPU; the player's choice otherwise.
+    let engine = null;
+    try { engine = localStorage.getItem('n64web-engine'); } catch (e) {}
+    globalThis.n64webRenderer = !navigator.gpu ? 'gl' : engine === 'gl' || engine === 'rt64' ? engine : (weak ? 'gl' : 'rt64');
+    document.getElementById('n64-engine').textContent = n64Text[globalThis.n64webRenderer === 'gl' ? 'engineGl' : 'engineRt'];
     globalThis.n64webQuality = q === '0' || q === '1' || q === '2' ? +q : (weak ? 0 : 1);
     document.getElementById('n64-gfx').textContent = n64Text['gfx' + globalThis.n64webQuality];
   })();
+  function n64Engine() {
+    if (!navigator.gpu) return;   // no WebGPU: LIGHT is the only engine
+    const next = globalThis.n64webRenderer === 'gl' ? 'rt64' : 'gl';
+    try { localStorage.setItem('n64web-engine', next); } catch (e) {}
+    n64Reload(location.pathname + location.search, n64Text.reloadengine);
+  }
   function n64Full() {
     const c = document.getElementById('canvas');
     (c.requestFullscreen || c.webkitRequestFullscreen).call(c);
