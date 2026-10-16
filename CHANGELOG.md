@@ -2,6 +2,17 @@
 
 What changed and how it was tested. Measurements come from headless Chrome on an Apple M1 unless said otherwise.
 
+## Online mode (2 players)
+- The page has an online mode: create a room, send the link, play. Each page runs the whole game from its own ROM and
+  only the controller inputs travel (lockstep), WebRTC between the browsers, with the room server as a fallback.
+- The game runs deterministically: video frames advance on tokens when every game thread waits, graphics, sound and
+  JPEG tasks complete at fixed points of game time, sound is clocked by video frames, and a busy thread is switched
+  after a fixed count of loop jumps instead of a host timer. Two runs with the same inputs are byte identical in the
+  console's 8 MB of memory, from boot through menus and a battle (tested twice with scripted inputs).
+- Online test on the published page, two browsers on one machine through the room server: 46 of 46 checkpoints
+  identical (frames 0 to 2700). When one page closes, the other plays on alone.
+- Single player runs on the same build at about 30 fps.
+
 ## Controllers and touch
 - USB and Bluetooth controllers with the browser's standard layout are picked up while the game runs. Unplugging
   one lets it go, so the next one is taken.
@@ -11,7 +22,7 @@ What changed and how it was tested. Measurements come from headless Chrome on an
 
 ## Side panel
 - `ports/stadium2/site/retro.html` is added to the published page by `tools/make_site.py`: the controls, fullscreen,
-  hide panel, a visit count kept in the browser and the online mode button (disabled, coming soon). Texts follow
+  hide panel, a visit count kept in the browser and the online mode box. Texts follow
   the browser's language, Portuguese or English.
 
 ## Sound

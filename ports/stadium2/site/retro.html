@@ -69,6 +69,31 @@
   #n64-touch .knob { position: absolute; width: 56px; height: 56px; left: 37px; top: 37px; border-radius: 50%;
                      background: #ffffff59; border: 2px solid #fff9; pointer-events: none; }
   body.n64-touch #n64-open { left: 50%; transform: translateX(-50%); top: 6px; }
+
+  /* Online: the room form in the panel and the status box over the game. */
+  #n64-code { width: 100%; box-sizing: border-box; padding: 5px 4px; text-align: center; text-transform: uppercase;
+              font: bold 16px "Courier New", monospace; letter-spacing: 4px; color: #ff0; background: #000;
+              border: 3px inset #777; }
+  .n64-row { display: flex; gap: 6px; align-items: stretch; margin-top: 6px; }
+  .n64-row > * { flex: 1; margin: 0; }
+  .n64-note { margin-top: 6px; font-size: 11px; color: #ccc; }
+  #n64-net { position: fixed; z-index: 7; top: 10px; left: calc(50% + var(--panel) / 2); transform: translateX(-50%);
+             width: min(440px, calc(100vw - var(--panel) - 24px)); box-sizing: border-box; padding: 8px 10px; color: #fff;
+             font: 13px/1.4 Verdana, Tahoma, sans-serif; background: #070420e6; border: 4px ridge #6b5cff; display: none; }
+  body:not(.n64-panel) #n64-net { left: 50%; width: min(440px, calc(100vw - 24px)); }
+  #n64-net.on { display: block; }
+  #n64-net.small { padding: 3px 8px; font-size: 11px; opacity: .85; }
+  #n64-net.small .big, #n64-net.small .link { display: none; }
+  #n64-net .big { font: bold 15px "Comic Sans MS", "Comic Sans", cursive; color: #ff0; margin-bottom: 4px; }
+  #n64-net .code { font: bold 24px "Courier New", monospace; letter-spacing: 6px; color: #0f0; }
+  #n64-net .link { display: flex; gap: 6px; margin-top: 6px; }
+  #n64-net .link input { flex: 1; min-width: 0; font: 12px "Courier New", monospace; color: #0ff; background: #000;
+                         border: 2px inset #777; padding: 3px; }
+  #n64-net .link button, #n64-net .bar button { margin: 0; width: auto; padding: 3px 10px; font-size: 12px; }
+  #n64-net .bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; }
+  #n64-net.small .bar { margin-top: 0; }
+  #n64-net .err { color: #f88; }
+  @media (max-width: 760px) { #n64-net { left: 50%; width: calc(100vw - 24px); } }
 </style>
 <!--/STYLE-->
 <!--PANEL-->
@@ -79,11 +104,17 @@
     let url = '';
     try {
       const q = new URLSearchParams(location.search).get('rom');
-      if (q) { localStorage.setItem('n64web-rom', q); history.replaceState(null, '', location.pathname); }
+      if (q) {
+        localStorage.setItem('n64web-rom', q);
+        const u = new URL(location.href); u.searchParams.delete('rom');
+        history.replaceState(null, '', u.pathname + u.search);
+      }
       url = q || localStorage.getItem('n64web-rom') || '';
     } catch (e) {}
-    if (!url || !window.crossOriginIsolated) return;
+    if (!url || !window.crossOriginIsolated || !navigator.gpu) return;
     const pt = /^pt/i.test(navigator.language || '');
+    // The status line also carries the page's errors (red): never write over one.
+    const say = (text) => { const st = document.getElementById('status'); if (st && !st.style.color) st.textContent = text; };
     globalThis.n64webRomState = 'loading';
     fetch(url).then(async (r) => {
       if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -93,12 +124,22 @@
         const { done, value } = await reader.read();
         if (done) break;
         parts.push(value); got += value.length;
-        const st = document.getElementById('status');
-        if (st && total) st.textContent = (pt ? 'Baixando a ROM ' : 'Downloading the ROM ') + Math.floor(got * 100 / total) + '%';
+        if (total) say((pt ? 'Baixando a ROM ' : 'Downloading the ROM ') + Math.floor(got * 100 / total) + '%');
       }
       const rom = new Uint8Array(got); let at = 0;
       for (const part of parts) { rom.set(part, at); at += part.length; }
       globalThis.n64webRom = rom; globalThis.n64webRomState = 'done';
+      say(pt ? 'ROM pronta. Iniciando o jogo...' : 'ROM ready. Starting the game...');
+      // The game clears the status line once it runs. Still there after 90 s: it most likely ran out of memory.
+      setTimeout(() => {
+        const st = document.getElementById('status');
+        if (st && st.textContent && !st.style.color) {
+          st.style.color = '#f88';
+          st.textContent = pt
+            ? 'O jogo não iniciou. Este aparelho provavelmente não tem memória suficiente (o jogo usa cerca de 1,5 GB). Num computador com Chrome ou Edge ele roda.'
+            : 'The game did not start. This device most likely ran out of memory (the game uses about 1.5 GB). It runs on a computer with Chrome or Edge.';
+        }
+      }, 90000);
     }).catch((e) => { console.log('[n64web] ROM download failed: ' + e); globalThis.n64webRomState = 'error'; });
   })();
 </script>
@@ -127,8 +168,16 @@
 
   <div class="n64-count"><span data-t="visits1"></span> <span id="n64-visits">000000</span> <span data-t="visits2"></span></div>
 
-  <button class="n64-b3" disabled tabindex="-1">&#9673; <span data-t="online"></span><span class="n64-soon" data-t="soon"></span></button>
-  <div class="foot"><span class="n64-new" data-t="new"></span> <span data-t="newtext"></span><br><span data-t="rom"></span></div>
+  <fieldset><legend>&#9673; <span data-t="online"></span> <span class="n64-new" data-t="new"></span></legend>
+    <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online('new')">&#9733; <span data-t="create"></span></button>
+    <div class="n64-row">
+      <input id="n64-code" maxlength="4" autocomplete="off" spellcheck="false" data-p="code"
+             onkeydown="event.stopPropagation(); if (event.key === 'Enter') n64Online(this.value)" onkeyup="event.stopPropagation()">
+      <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Online(document.getElementById('n64-code').value)" data-t="join"></button>
+    </div>
+    <div class="n64-note" data-t="onlinenote"></div>
+  </fieldset>
+  <div class="foot"><span data-t="rom"></span></div>
 </div>
 <script>
   // Texts in the visitor's language: Portuguese on a Portuguese browser, English anywhere else.
@@ -137,16 +186,25 @@
     pt: { panel: 'PAINEL',
           controls: 'CONTROLES', trigger: 'gatilho', space: 'Espaço', dpad: 'Direcional', stick: 'Analógico',
           options: 'OPÇÕES', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
-          online: 'MODO ONLINE', soon: 'EM BREVE', new: 'NOVO!', newtext: 'batalha de 2 jogadores pela internet em construção',
+          online: 'MODO ONLINE', new: 'NOVO!', create: 'CRIAR SALA', join: 'ENTRAR', code: 'CÓDIGO',
+          onlinenote: 'Batalha de 2 jogadores pela internet. Quem cria a sala é o jogador 1 e manda o link pro amigo. O jogo começa do zero nos dois.',
           rom: 'Traga sua própria ROM. Nenhum arquivo do jogo fica neste site.' },
     en: { panel: 'PANEL',
           controls: 'CONTROLS', trigger: 'trigger', space: 'Space', dpad: 'D-Pad', stick: 'Stick',
           options: 'OPTIONS', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
-          online: 'ONLINE MODE', soon: 'COMING SOON', new: 'NEW!', newtext: '2 player battles over the internet under construction',
+          online: 'ONLINE MODE', new: 'NEW!', create: 'CREATE ROOM', join: 'JOIN', code: 'CODE',
+          onlinenote: '2 player battles over the internet. Whoever creates the room is player 1 and sends the link to a friend. The game starts over on both.',
           rom: 'Bring your own ROM. No game files are hosted on this site.' },
   }[n64Lang];
   document.documentElement.lang = n64Lang === 'pt' ? 'pt-BR' : 'en';
+  window.addEventListener('DOMContentLoaded', () => {
+    const st = document.getElementById('status');
+    if (!st || !st.style.color || n64Lang !== 'pt') return;
+    if (/no WebGPU/.test(st.textContent)) st.textContent = 'Este navegador não tem WebGPU. No computador use Chrome ou Edge atualizado; no celular, Chrome atualizado no Android ou Safari no iOS 26.';
+    else if (/cross-origin isolation/.test(st.textContent)) st.textContent = 'Recarregue a página uma vez (a página precisa se reabrir para liberar as threads do jogo).';
+  });
   document.querySelectorAll('[data-t]').forEach((e) => { e.textContent = n64Text[e.dataset.t]; });
+  document.querySelectorAll('[data-p]').forEach((e) => { e.placeholder = n64Text[e.dataset.p]; });
   // Panel behaviour: show/hide (the canvas takes the freed width; SDL follows the window's resize), fullscreen, and a
   // visit count kept in this browser only. Nothing here takes the keyboard from the game.
   function n64Panel(on) {
@@ -169,6 +227,210 @@
     } catch (e) {}
     document.body.classList.toggle('n64-panel', show);
     document.getElementById('n64-visits').textContent = String(visits).padStart(6, '0');
+  })();
+</script>
+<div id="n64-net"></div>
+<script>
+  // Online mode: two pages, each running the whole game from its boot; only the controllers travel (lockstep). The game
+  // side is web_det.cpp: it waits at frame 0 for the partner, hands this page its player's input for frame f + delay
+  // (n64webNet.local) and a hash of the game every second (n64webNet.hash), and takes the partner's inputs
+  // (Module._n64web_net_remote). A room server pairs the pages by a 4 letter code and passes their WebRTC setup along
+  // (server/rooms.py), and carries the game packets itself when the browsers can't connect directly.
+  function n64Online(code) {
+    code = String(code || '').trim().toUpperCase();
+    if (code !== 'NEW' && !/^[A-Z0-9]{4}$/.test(code)) { document.getElementById('n64-code').focus(); return; }
+    const u = new URL(location.href); u.searchParams.set('online', code === 'NEW' ? 'new' : code);
+    location.href = u.pathname + u.search;
+  }
+  (function () {
+    const q = new URLSearchParams(location.search);
+    const want = (q.get('online') || '').toUpperCase();
+    if (!want) return;
+    const pt = n64Lang === 'pt';
+    const L = pt ? {
+      server: 'Conectando ao servidor de salas...', noserver: 'Não consegui falar com o servidor de salas. Tenta de novo daqui a pouco.',
+      created: 'Sala criada! Manda este link pro teu amigo:', copy: 'COPIAR', copied: 'COPIADO!', you1: 'Você é o JOGADOR 1.',
+      joining: 'Entrando na sala...', noroom: 'Essa sala não existe (ou o jogador 1 saiu). Confere o código.', full: 'Essa sala já tem 2 jogadores.',
+      peer: 'Amigo chegou! Conectando...', relay: 'Conexão direta não deu; indo pelo servidor (um pouco mais lento).',
+      live: (p, d) => `Online! Você é o JOGADOR ${p}.`, waitgame: 'Esperando o jogo carregar...',
+      left: 'O outro jogador saiu. O jogo segue só com você.', desync: (f) => `Os dois jogos se separaram (frame ${f}). Criem uma sala nova pra jogar de novo.`,
+      leave: 'SAIR DO ONLINE', ping: 'ping', nogame: 'Esta versão da página não tem o modo online.', room: 'SALA',
+    } : {
+      server: 'Connecting to the room server...', noserver: 'Could not reach the room server. Try again in a moment.',
+      created: 'Room created! Send this link to a friend:', copy: 'COPY', copied: 'COPIED!', you1: 'You are PLAYER 1.',
+      joining: 'Joining the room...', noroom: 'This room does not exist (or player 1 left). Check the code.', full: 'This room already has 2 players.',
+      peer: 'Your friend is here! Connecting...', relay: 'No direct connection; going through the server (a bit slower).',
+      live: (p, d) => `Online! You are PLAYER ${p}.`, waitgame: 'Waiting for the game to load...',
+      left: 'The other player left. The game goes on with you alone.', desync: (f) => `The two games went apart (frame ${f}). Create a new room to play again.`,
+      leave: 'LEAVE ONLINE', ping: 'ping', nogame: 'This version of the page has no online mode.', room: 'ROOM',
+    };
+    const box = document.getElementById('n64-net');
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    let head = '', body = '', foot = '';
+    const draw = () => {
+      box.className = 'on' + (live && !error ? ' small' : '');
+      box.innerHTML = (head ? `<div class="big">${head}</div>` : '') + body +
+        `<div class="bar"><span>${foot}</span><button class="n64-b3" id="n64-net-leave">${L.leave}</button></div>`;
+      document.getElementById('n64-net-leave').onclick = () => { location.href = location.pathname; };
+      const c = document.getElementById('n64-net-copy');
+      if (c) c.onclick = () => { navigator.clipboard.writeText(document.getElementById('n64-net-url').value).then(() => { c.textContent = L.copied; }); };
+    };
+    const say = (text, isError) => { body = `<div class="${isError ? 'err' : ''}">${esc(text)}</div>`; if (isError) error = true; draw(); };
+
+    const HIST = 1024, PKT_INPUT = 1, PKT_HASH = 2, MAX_SEND = 32;
+    let ws = null, pc = null, ctl = null, inp = null, relay = false, connected = false, live = false, error = false;
+    let isHost = want === 'NEW', code = isHost ? (q.get('room') || '').toUpperCase() : want, delay = 4, rtt = 0;
+    // This page's inputs (frame -> buttons, x, y) and what the partner has acknowledged; the partner's, delivered.
+    const lf = new Int32Array(HIST).fill(-1), lb = new Uint16Array(HIST), lx = new Float32Array(HIST), ly = new Float32Array(HIST);
+    const rf = new Int32Array(HIST).fill(-1);
+    let localMax = -1, peerAck = -1, remoteNext = 0, lastSend = 0;
+    const ownHash = new Map(), peerHash = new Map();
+
+    const game = () => (typeof Module !== 'undefined' && Module._n64web_net_begin) ? Module : null;
+
+    globalThis.n64webNet = {
+      local(f, b, x, y) { const i = f % HIST; lf[i] = f; lb[i] = b; lx[i] = x; ly[i] = y; localMax = Math.max(localMax, f); sendInputs(); },
+      hash(vi, hi, lo) { ownHash.set(vi, hi + ':' + lo); sendRaw(new Uint32Array([PKT_HASH, vi, hi, lo]).buffer); checkHashes(); },
+    };
+
+    function sendRaw(buf) {
+      if (relay) { if (ws && ws.readyState === 1) ws.send(buf); }
+      else if (inp && inp.readyState === 'open') inp.send(buf);
+    }
+    // Every packet carries this page's inputs from the first one the partner hasn't acknowledged (at most 32 frames),
+    // and the last partner frame this page has, so a lost packet is simply sent again in the next one.
+    function sendInputs() {
+      if (!live) return;
+      const first = Math.max(peerAck + 1, delay, localMax - MAX_SEND + 1);
+      const n = localMax - first + 1;
+      const v = new DataView(new ArrayBuffer(12 + Math.max(n, 0) * 10));
+      v.setUint32(0, PKT_INPUT, true); v.setInt32(4, remoteNext - 1, true); v.setInt32(8, first, true);
+      for (let k = 0; k < n; k++) {
+        const i = (first + k) % HIST, o = 12 + k * 10;
+        v.setUint16(o, lb[i], true); v.setFloat32(o + 2, lx[i], true); v.setFloat32(o + 6, ly[i], true);
+      }
+      sendRaw(v.buffer); lastSend = performance.now();
+    }
+    function onGamePacket(buf) {
+      if (!live || !(buf instanceof ArrayBuffer) || buf.byteLength < 12) return;
+      const v = new DataView(buf), type = v.getUint32(0, true);
+      if (type === PKT_HASH && buf.byteLength >= 16) { peerHash.set(v.getUint32(4, true), v.getUint32(8, true) + ':' + v.getUint32(12, true)); checkHashes(); return; }
+      if (type !== PKT_INPUT) return;
+      peerAck = Math.max(peerAck, v.getInt32(4, true));
+      const first = v.getInt32(8, true), n = (buf.byteLength - 12) / 10 | 0, M = game();
+      for (let k = 0; k < n; k++) {
+        const f = first + k, i = f % HIST, o = 12 + k * 10;
+        if (f < remoteNext || rf[i] === f) continue;
+        rf[i] = f;
+        M._n64web_net_remote(f, v.getUint16(o, true), v.getFloat32(o + 2, true), v.getFloat32(o + 6, true));
+      }
+      while (rf[remoteNext % HIST] === remoteNext) remoteNext++;
+    }
+    function checkHashes() {
+      for (const [vi, h] of ownHash) {
+        if (!peerHash.has(vi)) continue;
+        if (peerHash.get(vi) !== h && !error) { console.log('[net] desync at frame ' + vi); stop(); say(L.desync(vi), true); }
+        ownHash.delete(vi); peerHash.delete(vi);
+      }
+      if (peerHash.size > 600) peerHash.clear();
+    }
+    function stop() { live = false; const M = game(); if (M) M._n64web_net_end(); }
+
+    // ---- room server and the direct connection
+    const sendCtl = (obj) => {
+      const s = JSON.stringify(obj);
+      if (relay) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'ctl', data: s })); }
+      else if (ctl && ctl.readyState === 'open') ctl.send(s);
+    };
+    function connectServer() {
+      const url = q.get('signal') || globalThis.n64webSignal || '';
+      if (!url) { say(L.noserver, true); return; }
+      say(L.server);
+      ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
+      ws.onopen = () => ws.send(JSON.stringify(isHost ? { t: 'create', code } : { t: 'join', code }));
+      ws.onerror = () => { if (!connected) say(L.noserver, true); };
+      ws.onclose = () => { if (!connected && !error) say(L.noserver, true); };
+      ws.onmessage = (e) => {
+        if (e.data instanceof ArrayBuffer) { onGamePacket(e.data); return; }
+        const m = JSON.parse(e.data);
+        if (m.t === 'created') {
+          code = m.code;
+          const link = location.origin + location.pathname + '?online=' + code;
+          head = `${L.room} <span class="code">${code}</span>`; foot = L.you1;
+          body = `<div>${L.created}</div><div class="link"><input id="n64-net-url" readonly value="${esc(link)}"><button class="n64-b3" id="n64-net-copy">${L.copy}</button></div>`;
+          draw();
+        } else if (m.t === 'joined') { code = m.code; head = `${L.room} <span class="code">${code}</span>`; say(L.peer); peerUp(); }
+        else if (m.t === 'peer-joined') { say(L.peer); peerUp(); }
+        else if (m.t === 'peer-left') { if (live) { stop(); say(L.left, true); } else say(L.left, true); }
+        else if (m.t === 'error') say(m.msg === 'no-room' ? L.noroom : m.msg === 'room-full' ? L.full : L.noserver, true);
+        else if (m.t === 'signal') onSignal(m.data);
+        else if (m.t === 'ctl') onCtl(m.data);
+      };
+    }
+    function peerUp() {
+      pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+      pc.onicecandidate = (e) => { if (e.candidate) ws.send(JSON.stringify({ t: 'signal', data: { ice: e.candidate } })); };
+      pc.oniceconnectionstatechange = () => console.log('[net] ice ' + pc.iceConnectionState);
+      const wire = (ch) => {
+        ch.binaryType = 'arraybuffer';
+        if (ch.label === 'ctl') {
+          ctl = ch; ch.onmessage = (e) => onCtl(e.data);
+          const open = () => { if (!relay) console.log('[net] direct connection'); onConnected(); };
+          if (ch.readyState === 'open') open(); else ch.onopen = open;
+        }
+        else { inp = ch; ch.onmessage = (e) => onGamePacket(e.data); }
+      };
+      if (isHost) {
+        wire(pc.createDataChannel('ctl', { ordered: true }));
+        wire(pc.createDataChannel('in', { ordered: false, maxRetransmits: 0 }));
+        pc.createOffer().then((o) => pc.setLocalDescription(o)).then(() => ws.send(JSON.stringify({ t: 'signal', data: { sdp: pc.localDescription } })));
+      } else pc.ondatachannel = (e) => wire(e.channel);
+      setTimeout(() => { if (!connected && !error) { relay = true; console.log('[net] through the room server'); say(L.relay); onConnected(); } }, 8000);
+    }
+    // One setup message at a time, in order: a network address that arrives while the offer or answer is still being
+    // applied would otherwise be refused, and without them the direct connection fails (and play goes through the server).
+    let signals = Promise.resolve();
+    function onSignal(d) { signals = signals.then(() => applySignal(d)).catch((e) => console.log('[net] setup: ' + e)); }
+    async function applySignal(d) {
+      if (d.sdp) {
+        await pc.setRemoteDescription(d.sdp);
+        if (d.sdp.type === 'offer') { await pc.setLocalDescription(await pc.createAnswer()); ws.send(JSON.stringify({ t: 'signal', data: { sdp: pc.localDescription } })); }
+      } else if (d.ice) { try { await pc.addIceCandidate(d.ice); } catch (e) {} }
+    }
+    let pings = 0;
+    function onConnected() {
+      if (connected) return;
+      connected = true;
+      setInterval(() => sendCtl({ t: 'ping', ts: performance.now() }), 1000);
+      if (isHost) for (let k = 0; k < 5; k++) setTimeout(() => sendCtl({ t: 'ping', ts: performance.now() }), k * 150);
+    }
+    function onCtl(raw) {
+      const m = JSON.parse(raw);
+      if (m.t === 'ping') sendCtl({ t: 'pong', ts: m.ts });
+      else if (m.t === 'pong') {
+        const r = performance.now() - m.ts; rtt = rtt ? rtt * 0.8 + r * 0.2 : r;
+        if (live) { foot = `${L.live(isHost ? 1 : 2)} ${L.ping} ${Math.round(rtt)} ms`; draw(); }
+        // The host picks the delay from the first round trips: a frame's input must cross before the frame plays.
+        if (isHost && !live && ++pings === 5) {
+          const d = Math.max(3, Math.min(12, Math.ceil(rtt / 2 / (1000 / 60)) + 3));
+          sendCtl({ t: 'go', delay: d }); go(d);
+        }
+      } else if (m.t === 'go') go(m.delay);
+    }
+    function go(d) {
+      const M = game();
+      if (!M) {
+        // The game's code still loading: begin once it is there (its frame 0 waits for this).
+        if (typeof Module !== 'undefined' && !Module._n64web_net_begin && Module.calledRun) { say(L.nogame, true); return; }
+        setTimeout(() => go(d), 200); return;
+      }
+      delay = d; remoteNext = d; live = true;
+      M._n64web_net_begin(isHost ? 0 : 1, d);
+      foot = L.live(isHost ? 1 : 2); body = ''; head = ''; draw();
+      setInterval(() => { if (live && performance.now() - lastSend > 50) sendInputs(); }, 50);
+    }
+    window.addEventListener('DOMContentLoaded', connectServer);
+    if (document.readyState !== 'loading') connectServer();
   })();
 </script>
 <div id="n64-touch">

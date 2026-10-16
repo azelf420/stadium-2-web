@@ -1,0 +1,67 @@
+{
+ "page": "index.html",
+ "load": [
+  [
+   "until",
+   "ROM loaded from the page|choose your Pokemon Stadium 2",
+   240000
+  ],
+  [
+   "wait",
+   1500
+  ]
+ ],
+ "setup": [],
+ "start": [],
+ "play": [
+  [
+   "wait",
+   30000
+  ],
+  [
+   "eval",
+   "JSON.stringify({frame: Module._n64web_net_frame(), stall: Module._n64web_net_stall_ms(), box: document.getElementById('n64-net').innerText})"
+  ],
+  [
+   "hold",
+   "Enter",
+   "Enter",
+   13,
+   150
+  ],
+  [
+   "wait",
+   8000
+  ],
+  [
+   "hold",
+   "Enter",
+   "Enter",
+   13,
+   150
+  ],
+  [
+   "wait",
+   8000
+  ],
+  [
+   "hold",
+   "KeyX",
+   "x",
+   88,
+   150
+  ],
+  [
+   "wait",
+   30000
+  ],
+  [
+   "shot",
+   "pages_net_host.png"
+  ],
+  [
+   "eval",
+   "JSON.stringify({frame: Module._n64web_net_frame(), stall: Module._n64web_net_stall_ms(), box: document.getElementById('n64-net').innerText})"
+  ]
+ ]
+}

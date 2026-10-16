@@ -27,6 +27,6 @@ ln -sfn generated_web "$S2/generated"
 
 # 3. The page.
 embuilder build sdl2-mt freetype-legacysjlj >/dev/null
-emcmake cmake -S "$S2/web" -B "$B/stadium2-web" -G Ninja -DCMAKE_BUILD_TYPE=Release -DRT64_NAGA_EXECUTABLE="$(which naga)" >/dev/null
+emcmake cmake -S "$S2/web" -B "$B/stadium2-web" -G Ninja -DCMAKE_BUILD_TYPE=Release -DRT64_NAGA_EXECUTABLE="$(which naga)" -DN64WEB_DET=ON >/dev/null
 ninja -C "$B/stadium2-web" -j4
 echo "page: $B/stadium2-web/game.html   (play locally: node tools/serve.mjs build/stadium2-web 8090 --rom <your rom>)"

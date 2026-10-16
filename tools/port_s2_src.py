@@ -369,3 +369,94 @@ edit('src/main/main.cpp', [
         }
     }'''),
 ], 'waiting for the page')
+
+# Deterministic builds (N64_COSIM): a hook at the one deterministic point where a video frame advances (every game thread
+# waiting, a token granted), for the RDRAM hash check now and the lockstep input exchange later (ports/stadium2/web_det.cpp).
+edit('lib/N64ModernRuntime/ultramodern/src/events.cpp', [
+ ('''static void ultramodern_cosim_advance_vi(uint8_t* rdram) {
+    cosim_vi_advancing.store(1, std::memory_order_release);''', '''extern "C" void n64web_det_on_vi(uint8_t* rdram, uint64_t vi);
+
+static void ultramodern_cosim_advance_vi(uint8_t* rdram) {
+    n64web_det_on_vi(rdram, total_vis);
+    cosim_vi_advancing.store(1, std::memory_order_release);'''),
+], 'n64web_det_on_vi')
+
+# Deterministic builds: the audio length the game polls (AI_LEN) comes from a DAC clocked by video frames, not by the
+# host's audio buffer, so the game makes the same amount of sound each frame on every machine. Sound still plays.
+edit('lib/N64ModernRuntime/ultramodern/src/audio.cpp', [
+ ('''void ultramodern::queue_audio_buffer(RDRAM_ARG PTR(int16_t) audio_data_, uint32_t byte_count) {''', '''#ifdef N64_COSIM
+extern uint64_t total_vis;
+static uint64_t det_ai_queued = 0;     // bytes the game has handed to the AI
+static double det_ai_drained = 0.0;    // bytes the virtual DAC has played
+static uint64_t det_ai_last_vi = 0;
+static bool det_ai_started = false;
+#endif
+
+void ultramodern::queue_audio_buffer(RDRAM_ARG PTR(int16_t) audio_data_, uint32_t byte_count) {
+#ifdef N64_COSIM
+    if (!det_ai_started) { det_ai_started = true; det_ai_last_vi = total_vis; }
+    det_ai_queued += byte_count;
+#endif'''),
+ ('''uint32_t ultramodern::get_remaining_audio_bytes() {''', '''uint32_t ultramodern::get_remaining_audio_bytes() {
+#ifdef N64_COSIM
+    if (det_ai_started) {
+        // 2 channels of int16 at sample_rate, 59.94 video frames a second; an empty DAC stops instead of running ahead.
+        const double per_vi = (double)sample_rate * 4.0 * 1001.0 / 60000.0;
+        det_ai_drained += (double)(total_vis - det_ai_last_vi) * per_vi;
+        det_ai_last_vi = total_vis;
+        if (det_ai_drained > (double)det_ai_queued) det_ai_drained = (double)det_ai_queued;
+        return (uint32_t)((double)det_ai_queued - det_ai_drained) & ~7u;
+    }
+    return 0;
+#endif'''),
+], 'det_ai_queued')
+
+# Deterministic builds: a game thread spinning in a loop is yielded after a fixed number of loop back-edges since the last
+# thread switch, instead of after 200 ms of host time (the monitor), so the switch happens at the same point everywhere.
+edit('lib/N64ModernRuntime/ultramodern/src/scheduler_tick.cpp', [
+ ('''void ultramodern::record_context_switch() {
+    g_last_switch_ms.store(now_ms(), std::memory_order_relaxed);''', '''#ifdef N64_COSIM
+uint64_t g_det_backedges_since_switch = 0;
+constexpr uint64_t kDetStuckBackedges = 50000;
+#endif
+
+void ultramodern::record_context_switch() {
+#ifdef N64_COSIM
+    g_det_backedges_since_switch = 0;
+#endif
+    g_last_switch_ms.store(now_ms(), std::memory_order_relaxed);'''),
+ ('''extern "C" void ultramodern_scheduler_tick_vram(uint32_t pc) {
+    record_loop_checkpoint(pc);
+#ifdef N64_COSIM
+    ultramodern_cosim_advance_cpu_cycles(kCosimLoopBackedgeRetired, kCosimLoopBackedgeCost);
+#endif''', '''extern "C" void ultramodern_scheduler_tick_vram(uint32_t pc) {
+    record_loop_checkpoint(pc);
+#ifdef N64_COSIM
+    ultramodern_cosim_advance_cpu_cycles(kCosimLoopBackedgeRetired, kCosimLoopBackedgeCost);
+    if (!g_enabled.load(std::memory_order_relaxed) && ultramodern::is_game_thread() &&
+        ++g_det_backedges_since_switch >= kDetStuckBackedges) {
+        g_det_backedges_since_switch = 0;
+        g_should_yield.store(1, std::memory_order_relaxed);
+    }
+#endif'''),
+], 'kDetStuckBackedges')
+
+# Deterministic builds: the game's controller reads return the input latched for the current video frame
+# (ports/stadium2/web_det.cpp), sampled from the live devices, a test script or, for online play, both players.
+edit('src/main/main.cpp', [
+ ('''static bool get_n64_input(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out) {''',
+  '''static bool get_n64_input_live(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out);
+#ifdef N64WEB_DET
+extern "C" bool n64web_det_input(int port, uint16_t* buttons, float* x, float* y,
+                                 bool (*live)(int, uint16_t*, float*, float*));
+#endif
+static bool get_n64_input(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out) {
+#ifdef N64WEB_DET
+    return n64web_det_input(controller_num, buttons_out, x_out, y_out, get_n64_input_live);
+#else
+    return get_n64_input_live(controller_num, buttons_out, x_out, y_out);
+#endif
+}
+
+static bool get_n64_input_live(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out) {'''),
+], 'get_n64_input_live')

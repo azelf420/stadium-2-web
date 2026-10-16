@@ -1,5 +1,6 @@
 # Builds the published page from the built one: points game.wasm and game.data at the asset host (so the game's code
-# is not in the site repository) and adds the retro side panel (ports/stadium2/site/retro.html).
+# is not in the site repository), points the online mode at the room server on that host, and adds the retro side
+# panel (ports/stadium2/site/retro.html).
 #   python3 tools/make_site.py <built game.html> <out index.html> <asset base URL ending in />
 import pathlib
 import re
@@ -16,6 +17,11 @@ def once(text, old, new):
     return text.replace(old, new)
 
 page = once(page, 'var Module={', "var Module={locateFile:p=>/\\.(wasm|data)$/.test(p)?'" + base + "'+p:p,")
+# The online mode's room server sits on the asset host (server/rooms.py behind its web server, at /signal).
+origin = re.match(r'https?://[^/]+', base)
+if origin:
+    signal = re.sub(r'^http', 'ws', origin.group(0)) + '/signal'
+    page = once(page, 'var Module={', "globalThis.n64webSignal='" + signal + "';var Module={")
 page = once(page, '</head>', style + '</head>')
 page = once(page, '<body>', '<body>' + body)
 open(dst, 'w').write(page)

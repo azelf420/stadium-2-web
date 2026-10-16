@@ -14,6 +14,10 @@
 #include "pokestadium_render.h"
 #include "rt64_web_renderer.h"
 
+#ifdef N64WEB_DET
+extern "C" void n64web_det_start();
+#endif
+
 namespace pkmnstadium::recompui {
     bool run(const char* rom_path_in, char* out_rom, std::size_t out_len) {
         if (rom_path_in && out_len) { std::strncpy(out_rom, rom_path_in, out_len - 1); out_rom[out_len - 1] = 0; }
@@ -34,7 +38,12 @@ namespace pkmnstadium::recompui {
 }
 
 namespace pkmnstadium::dbg {
-    void start(int) {}
+    // main() calls this before recomp::start: in lockstep builds, the moment to take frame control, before the game runs.
+    void start(int) {
+#ifdef N64WEB_DET
+        n64web_det_start();
+#endif
+    }
     void shutdown() {}
     std::atomic<bool>     g_fast_forward{false};
     std::atomic<bool>     g_enable_instant_present_request{false};
@@ -61,7 +70,16 @@ namespace pkmnstadium::ares_worker {
 namespace pokestadium::renderer {
     std::unique_ptr<ultramodern::renderer::RendererContext>
     create_render_context(uint8_t* rdram, ultramodern::renderer::WindowHandle, bool) {
+#ifdef N64WEB_DET
+        n64web_det_start();
+#endif
+#ifdef N64WEB_DET
+        // Render to RAM writes each drawn frame back into RDRAM whenever the GPU finishes it, so its timing differs between
+        // two machines. The game's logic doesn't read its frames back, so lockstep builds leave it off.
+        return recompweb::create_rt64_renderer(rdram, false);
+#else
         return recompweb::create_rt64_renderer(rdram, true);
+#endif
     }
 }
 

@@ -20,12 +20,26 @@ Done:
 - [x] USB and Bluetooth controllers, detected automatically (plug in and press a button)
 - [x] Virtual on screen controller on phones and tablets
 - [x] Side panel with the controls, in Portuguese or English depending on the browser
+- [x] **Online mode** (first version): 2 players over the internet, by a room code
 
 In progress:
-- [ ] **Online mode**: 2 player battles over the internet
+- [ ] Online mode tested between two homes and through a whole battle
 - [ ] Pokémon pictures in the rental list (see `STATUS.md`)
 
 Not tested yet: Gym Leader Castle, mini games, GB Tower, Firefox, Safari, phones.
+
+## Online mode
+
+In the side panel, **CREATE ROOM** gives a 4 letter code and a link: send the link to a friend. Whoever creates the
+room is player 1, the friend is player 2, and the game starts over on both pages. Each player runs the game from their
+own ROM; only the controllers travel between the two browsers (directly when the networks allow it, otherwise through
+the room server). Every second the two games compare a fingerprint of their memory; if they ever differ, the page says
+so and online play stops.
+
+How it works: the game is built in a deterministic mode, where a video frame only advances when every game thread is
+waiting and the graphics, sound and picture tasks finish at fixed points of game time. The input a player gives at
+frame N is used at frame N + delay on both machines (delay from the ping, 3 to 12 frames). The room server is
+`server/rooms.py` (Python standard library only); `tools/deploy_rooms.sh` installs it behind a web server.
 
 ## Controls
 
@@ -71,7 +85,8 @@ the exact versions in `ports/pins.txt`. `CHANGELOG.md` lists what was fixed and 
 
 Port do Pokémon Stadium 2 pro navegador. Nenhum arquivo do jogo vem aqui: você precisa da sua própria ROM (US).
 Pra jogar, abre https://azelf420.github.io/s2w/ no Chrome e escolhe sua ROM. Pra compilar, roda os três comandos da
-seção "Build it yourself" com o caminho da sua ROM. O modo online está em andamento.
+seção "Build it yourself" com o caminho da sua ROM. Modo online: no painel, CRIAR SALA e manda o link pro amigo. Quem cria é o jogador 1, e o jogo começa do zero nos
+dois.
 
 ## License
 

@@ -12,6 +12,7 @@
 !tools/*.sh
 !tools/*.py
 !tools/*.mjs
+!server/*.py
 !ports/**/*.patch
 !ports/**/*.txt
 !ports/**/*.json

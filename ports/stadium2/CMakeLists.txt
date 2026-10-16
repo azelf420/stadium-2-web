@@ -50,6 +50,14 @@ list(FILTER ULTRAMODERN_SOURCES EXCLUDE REGEX "/mesgqueue\\.cpp$")
 set_property(TARGET ultramodern PROPERTY SOURCES "${ULTRAMODERN_SOURCES}")
 target_sources(ultramodern PRIVATE ${S2}/mac_mesgqueue.cpp)
 
+# Deterministic stepping (the runtime's co-simulation mode): video frames advance only on tokens and only when every game
+# thread waits, and RCP events are delivered at fixed points in simulated time. The base for 2 player online lockstep.
+option(N64WEB_DET "Build the runtime with deterministic VI stepping (N64_COSIM)" OFF)
+if (N64WEB_DET)
+    target_compile_definitions(ultramodern PRIVATE N64_COSIM)
+    target_compile_definitions(librecomp PRIVATE N64_COSIM)
+endif()
+
 add_subdirectory(${KIT}/frontend ${CMAKE_BINARY_DIR}/web_frontend)
 add_subdirectory(${KIT}/renderer ${CMAKE_BINARY_DIR}/web_renderer)
 
@@ -82,14 +90,18 @@ add_executable(PokemonStadiumGSRecomp
     ${S2}/rsp/gbTowerColorMain.cpp
     ${S2}/rsp/njpgdspMain.cpp
     ${PORT_DIR}/web_glue.cpp
+    ${PORT_DIR}/web_det.cpp
 )
 target_include_directories(PokemonStadiumGSRecomp PRIVATE
     ${S2}/include ${S2}/src/main ${S2}/generated_web
-    ${RT}/ultramodern/include ${RT}/librecomp/include ${RT}/N64Recomp/include ${RT}/thirdparty/concurrentqueue
+    ${RT}/ultramodern/include ${RT}/librecomp/include ${RT}/N64Recomp/include ${RT}/thirdparty/concurrentqueue ${RT}/thirdparty/xxHash
     ${S2}/lib/rt64-web/src ${S2}/lib/rt64-web/src/contrib ${S2}/lib/rt64-web/src/contrib/hlslpp/include
     ${S2}/lib/rt64-web/src/rhi ${S2}/lib/rt64-web/src/render
     ${CMAKE_CURRENT_BINARY_DIR})
 target_compile_options(PokemonStadiumGSRecomp PRIVATE -fno-strict-aliasing -fms-extensions -sUSE_SDL=2)
+if (N64WEB_DET)
+    target_compile_definitions(PokemonStadiumGSRecomp PRIVATE N64_COSIM N64WEB_DET)
+endif()
 target_link_libraries(PokemonStadiumGSRecomp PRIVATE RecompiledFuncs librecomp ultramodern n64recomp_browser_renderer
     n64recomp_browser_file_picker)
 # Neutral file names on the web: game.html, game.js, game.wasm, game.data.
