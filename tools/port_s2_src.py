@@ -339,3 +339,33 @@ edit('src/main/main.cpp', [
     }
 }'''),
 ], 'controller disconnected')
+
+# The page downloads the saved ROM address itself (async fetch on its own thread, with progress; ports/stadium2/site),
+# because a synchronous cross-origin XHR from a game thread hung behind GitHub Pages' coi_serviceworker. The game
+# waits for that download and copies the bytes from the page's thread.
+edit('src/main/main.cpp', [
+ ('''    if (size <= 0) {
+        char url[2048];
+        const int len = psr_web_rom_url(url, sizeof(url));
+        if (len > 0) {
+            fprintf(stderr, "[PSR] fetching the ROM from the saved address\\n");
+            size = psr_web_url_rom_size(url, len);
+        }
+    }''', '''    if (size <= 0) {
+        // 0 none, 1 done, 2 downloading (globalThis.n64webRomState, set by the page).
+        int state = MAIN_THREAD_EM_ASM_INT({ const s = globalThis.n64webRomState; return s === 'done' ? 1 : s === 'loading' ? 2 : 0; });
+        if (state == 2) fprintf(stderr, "[PSR] waiting for the page's ROM download\\n");
+        while (state == 2) {
+            SDL_Delay(50);
+            state = MAIN_THREAD_EM_ASM_INT({ const s = globalThis.n64webRomState; return s === 'done' ? 1 : s === 'loading' ? 2 : 0; });
+        }
+        if (state == 1) {
+            const int n = MAIN_THREAD_EM_ASM_INT({ return globalThis.n64webRom ? globalThis.n64webRom.length : 0; });
+            if (n > 0) {
+                std::vector<uint8_t> rom(static_cast<size_t>(n));
+                MAIN_THREAD_EM_ASM({ HEAPU8.set(globalThis.n64webRom, $0); globalThis.n64webRom = null; }, rom.data());
+                return rom;
+            }
+        }
+    }'''),
+], 'waiting for the page')

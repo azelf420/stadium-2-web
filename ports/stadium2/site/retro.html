@@ -72,6 +72,36 @@
 </style>
 <!--/STYLE-->
 <!--PANEL-->
+<script>
+  // The ROM address given once (?rom=<url>) or saved earlier: the page downloads it here, with progress, and the game
+  // takes the bytes when it starts (main.cpp waits on n64webRomState).
+  (function () {
+    let url = '';
+    try {
+      const q = new URLSearchParams(location.search).get('rom');
+      if (q) { localStorage.setItem('n64web-rom', q); history.replaceState(null, '', location.pathname); }
+      url = q || localStorage.getItem('n64web-rom') || '';
+    } catch (e) {}
+    if (!url || !window.crossOriginIsolated) return;
+    const pt = /^pt/i.test(navigator.language || '');
+    globalThis.n64webRomState = 'loading';
+    fetch(url).then(async (r) => {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const total = +r.headers.get('content-length') || 0, reader = r.body.getReader(), parts = [];
+      let got = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value); got += value.length;
+        const st = document.getElementById('status');
+        if (st && total) st.textContent = (pt ? 'Baixando a ROM ' : 'Downloading the ROM ') + Math.floor(got * 100 / total) + '%';
+      }
+      const rom = new Uint8Array(got); let at = 0;
+      for (const part of parts) { rom.set(part, at); at += part.length; }
+      globalThis.n64webRom = rom; globalThis.n64webRomState = 'done';
+    }).catch((e) => { console.log('[n64web] ROM download failed: ' + e); globalThis.n64webRomState = 'error'; });
+  })();
+</script>
 <button id="n64-open" class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Panel(true)">&#9776; <span data-t="panel"></span></button>
 <div id="n64">
 

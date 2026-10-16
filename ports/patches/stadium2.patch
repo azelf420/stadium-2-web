@@ -1,5 +1,5 @@
 diff --git a/src/main/main.cpp b/src/main/main.cpp
-index 2a6075c..aca9af1 100644
+index 2a6075c..8523ae3 100644
 --- a/src/main/main.cpp
 +++ b/src/main/main.cpp
 @@ -88,6 +88,16 @@ std::filesystem::path exe_dir() {
@@ -19,7 +19,7 @@ index 2a6075c..aca9af1 100644
  #elif defined(__ANDROID__)
      const char* internal_storage = SDL_AndroidGetInternalStoragePath();
      if (internal_storage != nullptr && internal_storage[0] != '\0') {
-@@ -474,6 +484,30 @@ extern "C" void psr_dump_trace_snapshot(const char* name) {
+@@ -474,6 +484,71 @@ extern "C" void psr_dump_trace_snapshot(const char* name) {
  #include "ares_worker.h"
  #include "transfer_pak.h"
  #include "recompui_launcher.h"
@@ -40,9 +40,50 @@ index 2a6075c..aca9af1 100644
 +EM_JS(void, psr_web_served_rom_copy, (uint8_t* dst), {
 +    HEAPU8.set(globalThis.psrServedRom, dst); globalThis.psrServedRom = null;
 +});
++// The ROM address from ?rom= (saved to localStorage) or saved earlier, read on the page's thread; its length, or 0.
++static int psr_web_rom_url(char* buf, int cap) {
++    return MAIN_THREAD_EM_ASM_INT({
++        let u = '';
++        try {
++            const q = new URLSearchParams(location.search).get('rom');
++            if (q) { localStorage.setItem('n64web-rom', q); history.replaceState(null, '', location.pathname); }
++            u = q || localStorage.getItem('n64web-rom') || '';
++        } catch (e) {}
++        const b = new TextEncoder().encode(u);
++        const n = Math.min(b.length, $1 - 1);
++        HEAPU8.set(b.subarray(0, n), $0); HEAPU8[$0 + n] = 0;
++        return n;
++    }, buf, cap);
++}
++EM_JS(int, psr_web_url_rom_size, (const char* url, int len), {
++    try {
++        const u = new TextDecoder().decode(HEAPU8.slice(url, url + len));
++        const x = new XMLHttpRequest(); x.open('GET', u, false); x.responseType = 'arraybuffer'; x.send();
++        if (x.status !== 200 || !x.response) return 0;
++        globalThis.psrServedRom = new Uint8Array(x.response);
++        return globalThis.psrServedRom.length;
++    } catch (e) { return 0; }
++});
 +static std::vector<uint8_t> psr_web_fetch_served_rom() {
 +    std::vector<uint8_t> out;
-+    const int size = psr_web_served_rom_size();
++    int size = psr_web_served_rom_size();
++    if (size <= 0) {
++        // 0 none, 1 done, 2 downloading (globalThis.n64webRomState, set by the page).
++        int state = MAIN_THREAD_EM_ASM_INT({ const s = globalThis.n64webRomState; return s === 'done' ? 1 : s === 'loading' ? 2 : 0; });
++        if (state == 2) fprintf(stderr, "[PSR] waiting for the page's ROM download\n");
++        while (state == 2) {
++            SDL_Delay(50);
++            state = MAIN_THREAD_EM_ASM_INT({ const s = globalThis.n64webRomState; return s === 'done' ? 1 : s === 'loading' ? 2 : 0; });
++        }
++        if (state == 1) {
++            const int n = MAIN_THREAD_EM_ASM_INT({ return globalThis.n64webRom ? globalThis.n64webRom.length : 0; });
++            if (n > 0) {
++                std::vector<uint8_t> rom(static_cast<size_t>(n));
++                MAIN_THREAD_EM_ASM({ HEAPU8.set(globalThis.n64webRom, $0); globalThis.n64webRom = null; }, rom.data());
++                return rom;
++            }
++        }
++    }
 +    if (size > 0) { out.resize(size_t(size)); psr_web_served_rom_copy(out.data()); }
 +    return out;
 +}
@@ -50,7 +91,7 @@ index 2a6075c..aca9af1 100644
  #include "input_bindings.h"
  
  extern "C" void recomp_entrypoint(uint8_t* rdram, recomp_context* ctx);
-@@ -1002,7 +1036,18 @@ static RspUcodeFunc* get_rsp_microcode(uint8_t* rdram, const OSTask* task) {
+@@ -1002,7 +1077,18 @@ static RspUcodeFunc* get_rsp_microcode(uint8_t* rdram, const OSTask* task) {
              // built from ROM 0x1060 at IMEM 0x1000, without prepending
              // rspboot; see tools/build_ps2_aspmain.py).
              return aspMain_ps2;
@@ -70,7 +111,7 @@ index 2a6075c..aca9af1 100644
          default:
              fprintf(stderr, "[Pokemon Stadium] Unknown RSP task type: %u\n", task->t.type);
              return nullptr;
-@@ -1691,8 +1736,41 @@ extern "C" int      psr_audio_wasapi_enabled(void);
+@@ -1691,8 +1777,41 @@ extern "C" int      psr_audio_wasapi_enabled(void);
  extern "C" int      psr_audio_wasapi_start(void);
  extern "C" unsigned psr_query_wasapi_mix_rate(void);
  
@@ -112,7 +153,7 @@ index 2a6075c..aca9af1 100644
      // ---- Native WASAPI render path (cpal-style: event-driven, shared-mode, native
      // mix format, default engine buffer, Pro-Audio thread). Bypasses SDL2 audio so
      // we can A/B against it by ear. The bridge still produces the PCM; only the
-@@ -1813,7 +1891,11 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
+@@ -1813,7 +1932,11 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
      SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
  #endif
      g_window = SDL_CreateWindow(
@@ -124,7 +165,7 @@ index 2a6075c..aca9af1 100644
          SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
          960, 720,
  #if defined(__ANDROID__)
-@@ -1841,7 +1923,7 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
+@@ -1841,7 +1964,7 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
      SDL_GetWindowWMInfo(g_window, &wmInfo);
  #if defined(_WIN32)
      return ultramodern::renderer::WindowHandle{ wmInfo.info.win.window, GetCurrentThreadId() };
@@ -133,7 +174,19 @@ index 2a6075c..aca9af1 100644
      return ultramodern::renderer::WindowHandle{ g_window };
  #elif defined(__linux__)
      return ultramodern::renderer::WindowHandle{ wmInfo.info.x11.window };
-@@ -2555,7 +2637,7 @@ int main(int argc, char** argv) {
+@@ -2037,6 +2160,11 @@ static void poll_inputs() {
+             }
+         }
+     } else {
++        if (g_pad && !SDL_GameControllerGetAttached(g_pad)) {
++            fprintf(stderr, "[input] controller disconnected\n");
++            SDL_GameControllerClose(g_pad);
++            g_pad = nullptr;
++        }
+         ensure_pad_open();
+     }
+ }
+@@ -2555,7 +2683,7 @@ int main(int argc, char** argv) {
      // instance) down. Unless PSR_AUTOBOOT bypasses it, we show the launcher,
      // persist launcher.cfg, and pick up the chosen ROM + per-port input config.
      const bool autoboot =
@@ -142,7 +195,7 @@ index 2a6075c..aca9af1 100644
          true;
  #else
          std::getenv("PSR_AUTOBOOT") != nullptr;
-@@ -2852,6 +2934,27 @@ int main(int argc, char** argv) {
+@@ -2852,6 +2980,27 @@ int main(int argc, char** argv) {
              if (!GetOpenFileNameA(&ofn)) return false;
              out = picked;
              return true;
