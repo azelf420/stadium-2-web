@@ -2,6 +2,14 @@
 
 What changed and how it was tested. Measurements come from headless Chrome on an Apple M1 unless said otherwise.
 
+## Lighter
+- The runtime's 1 GB memory region for the console was zeroed page by page when the game started, so each player
+  paid 1 GB of real memory for a console that has 8 MB. It is now taken from memory nobody has written, which the
+  browser gives already zeroed and which costs nothing until used: memory in use went from 1147 MB to 123 MB at boot
+  (161 MB in battle). The game runs byte for byte the same (454 of 454 checkpoints).
+- GRAPHICS option in the panel: LIGHT (the N64's own resolution), NORMAL (twice) and HIGH (the screen's). It changes
+  while playing. Phones, tablets and computers with little memory start on LIGHT.
+
 ## Online: player 2's controller
 - The game checks which controllers are plugged in once, at boot, and only then offers 2 player modes. In a room both
   pages now report controller 2 from the boot on, so 2 player modes open (tested: Game Pak Check shows two

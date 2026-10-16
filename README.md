@@ -21,6 +21,7 @@ Done:
 - [x] Virtual on screen controller on phones and tablets
 - [x] Side panel with the controls, in Portuguese or English depending on the browser
 - [x] **Online mode** (first version): 2 players over the internet, by a room code
+- [x] Graphics option (light, normal, high) and much less memory (about 160 MB in use instead of 1.2 GB)
 
 In progress:
 - [ ] Online mode tested between two homes and through a whole battle

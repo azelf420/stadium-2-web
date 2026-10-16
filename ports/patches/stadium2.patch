@@ -1,5 +1,5 @@
 diff --git a/src/main/main.cpp b/src/main/main.cpp
-index 2a6075c..8523ae3 100644
+index 2a6075c..1ae6331 100644
 --- a/src/main/main.cpp
 +++ b/src/main/main.cpp
 @@ -88,6 +88,16 @@ std::filesystem::path exe_dir() {
@@ -174,7 +174,7 @@ index 2a6075c..8523ae3 100644
      return ultramodern::renderer::WindowHandle{ g_window };
  #elif defined(__linux__)
      return ultramodern::renderer::WindowHandle{ wmInfo.info.x11.window };
-@@ -2037,6 +2160,11 @@ static void poll_inputs() {
+@@ -2037,11 +2160,29 @@ static void poll_inputs() {
              }
          }
      } else {
@@ -186,7 +186,47 @@ index 2a6075c..8523ae3 100644
          ensure_pad_open();
      }
  }
-@@ -2555,7 +2683,7 @@ int main(int argc, char** argv) {
+ 
++static bool get_n64_input_live(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out);
++#ifdef N64WEB_DET
++extern "C" bool n64web_det_input(int port, uint16_t* buttons, float* x, float* y,
++                                 bool (*live)(int, uint16_t*, float*, float*));
++#endif
+ static bool get_n64_input(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out) {
++#ifdef N64WEB_DET
++    return n64web_det_input(controller_num, buttons_out, x_out, y_out, get_n64_input_live);
++#else
++    return get_n64_input_live(controller_num, buttons_out, x_out, y_out);
++#endif
++}
++
++static bool get_n64_input_live(int controller_num, uint16_t* buttons_out, float* x_out, float* y_out) {
+     *buttons_out = 0;
+     *x_out = 0.0f;
+     *y_out = 0.0f;
+@@ -2211,6 +2352,9 @@ static void set_rumble(int controller_num, bool on) {
+     SDL_GameControllerRumble(pad, on ? 0xFFFF : 0, on ? 0xFFFF : 0, 1000);
+ }
+ 
++#ifdef N64WEB_DET
++extern "C" bool n64web_det_port_present(int port);
++#endif
+ static ultramodern::input::connected_device_info_t get_connected_device_info(int controller_num) {
+     const bool has_transfer_pak = pkmnstadium::transfer_pak::has_transfer_pak(controller_num);
+     ultramodern::input::connected_device_info_t info{};
+@@ -2238,7 +2382,11 @@ static ultramodern::input::connected_device_info_t get_connected_device_info(int
+     }
+     // Port 0 always reports present (keyboard/pad/TCP all feed get_n64_input);
+     // ports 1-3 present only when a Transfer Pak cart is configured.
++#ifdef N64WEB_DET
++    info.connected_device = (controller_num == 0 || has_transfer_pak || n64web_det_port_present(controller_num))
++#else
+     info.connected_device = (controller_num == 0 || has_transfer_pak)
++#endif
+         ? ultramodern::input::Device::Controller
+         : ultramodern::input::Device::None;
+     // Stadium identifies the *kind* of pak by reading its bus
+@@ -2555,7 +2703,7 @@ int main(int argc, char** argv) {
      // instance) down. Unless PSR_AUTOBOOT bypasses it, we show the launcher,
      // persist launcher.cfg, and pick up the chosen ROM + per-port input config.
      const bool autoboot =
@@ -195,7 +235,7 @@ index 2a6075c..8523ae3 100644
          true;
  #else
          std::getenv("PSR_AUTOBOOT") != nullptr;
-@@ -2852,6 +2980,27 @@ int main(int argc, char** argv) {
+@@ -2852,6 +3000,27 @@ int main(int argc, char** argv) {
              if (!GetOpenFileNameA(&ofn)) return false;
              out = picked;
              return true;

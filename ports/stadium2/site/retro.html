@@ -227,6 +227,7 @@
   </fieldset>
 
   <fieldset><legend>&#9733; <span data-t="options"></span> &#9733;</legend>
+    <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Quality()">&#9881; <span data-t="gfx"></span>: <span id="n64-gfx"></span></button>
     <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Full()">&#9974; <span data-t="full"></span></button>
     <button class="n64-b3" tabindex="-1" onmousedown="event.preventDefault()" onclick="n64Panel(false)">&#9668; <span data-t="hide"></span></button>
   </fieldset>
@@ -241,14 +242,14 @@
   const n64Text = {
     pt: { panel: 'PAINEL',
           controls: 'CONTROLES', trigger: 'gatilho', space: 'Espaço', dpad: 'Direcional', stick: 'Analógico',
-          options: 'OPÇÕES', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
+          options: 'OPÇÕES', gfx: 'GRÁFICOS', gfx0: 'LEVE', gfx1: 'NORMAL', gfx2: 'ALTO', full: 'TELA CHEIA', hide: 'ESCONDER PAINEL', pad: '🎮 Controles USB e Bluetooth são detectados automaticamente: é só conectar e apertar um botão.', visits1: 'Você já entrou aqui', visits2: 'vezes',
           online: 'MODO ONLINE', new: 'NOVO!', create: 'CRIAR SALA', join: 'ENTRAR', code: 'CÓDIGO', name: 'SEU NOME',
           reloadroom: 'O jogo vai reiniciar pra entrar na sala. Aguarde...', reloadleave: 'Saindo da sala. O jogo vai reiniciar...',
           onlinenote: 'Batalha de 2 jogadores pela internet. Quem cria a sala é o jogador 1 e passa o código pro amigo. O jogo começa do zero nos dois.',
           rom: 'Traga sua própria ROM. Nenhum arquivo do jogo fica neste site.' },
     en: { panel: 'PANEL',
           controls: 'CONTROLS', trigger: 'trigger', space: 'Space', dpad: 'D-Pad', stick: 'Stick',
-          options: 'OPTIONS', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
+          options: 'OPTIONS', gfx: 'GRAPHICS', gfx0: 'LIGHT', gfx1: 'NORMAL', gfx2: 'HIGH', full: 'FULLSCREEN', hide: 'HIDE PANEL', pad: '🎮 USB and Bluetooth controllers are detected automatically: plug one in and press a button.', visits1: 'You have been here', visits2: 'times',
           online: 'ONLINE MODE', new: 'NEW!', create: 'CREATE ROOM', join: 'JOIN', code: 'CODE', name: 'YOUR NAME',
           reloadroom: 'The game restarts to enter the room. Please wait...', reloadleave: 'Leaving the room. The game restarts...',
           onlinenote: '2 player battles over the internet. Whoever creates the room is player 1 and gives the code to a friend. The game starts over on both.',
@@ -270,6 +271,22 @@
     try { localStorage.setItem('n64web-panel', on ? '1' : '0'); } catch (e) {}
     setTimeout(() => { window.dispatchEvent(new Event('resize')); document.getElementById('canvas').focus(); }, 0);
   }
+  // Graphics: LIGHT draws at the N64's own resolution (phones, weak computers), NORMAL at twice it, HIGH at the
+  // screen's. Changed while the game runs; kept in this browser. Without a choice: LIGHT on phones, tablets and
+  // computers with little memory or few cores, NORMAL elsewhere.
+  function n64Quality() {
+    globalThis.n64webQuality = (globalThis.n64webQuality + 1) % 3;
+    try { localStorage.setItem('n64web-quality', String(globalThis.n64webQuality)); } catch (e) {}
+    if (typeof Module !== 'undefined' && Module._n64web_set_quality) Module._n64web_set_quality(globalThis.n64webQuality);
+    document.getElementById('n64-gfx').textContent = n64Text['gfx' + globalThis.n64webQuality];
+  }
+  (function () {
+    let q = null;
+    try { q = localStorage.getItem('n64web-quality'); } catch (e) {}
+    const weak = matchMedia('(pointer: coarse)').matches || (navigator.deviceMemory || 8) <= 4 || (navigator.hardwareConcurrency || 8) <= 4;
+    globalThis.n64webQuality = q === '0' || q === '1' || q === '2' ? +q : (weak ? 0 : 1);
+    document.getElementById('n64-gfx').textContent = n64Text['gfx' + globalThis.n64webQuality];
+  })();
   function n64Full() {
     const c = document.getElementById('canvas');
     (c.requestFullscreen || c.webkitRequestFullscreen).call(c);

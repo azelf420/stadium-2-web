@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstring>
 #include <emscripten.h>
+#include <malloc.h>
+#include <unistd.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -252,6 +254,29 @@ extern "C" void n64web_det_on_vi(uint8_t* rdram, uint64_t vi) {
     latch_inputs(vi);
     if ((g_latched[0].buttons | g_latched[1].buttons) != 0 && vi % 30 == 0)
         fprintf(stderr, "[det] input vi=%llu p0=%04x p1=%04x\n", (unsigned long long)vi, g_latched[0].buttons, g_latched[1].buttons);
+    // Memory: the top of the heap (what the page has really taken of its fixed 1.5 GB) and what is in use now.
+    if (vi % 600 == 0) {
+        const struct mallinfo mi = mallinfo();
+        fprintf(stderr, "[mem] vi=%llu heap_top=%u MB in_use=%u MB\n", (unsigned long long)vi,
+                (unsigned)((uintptr_t)sbrk(0) >> 20), (unsigned)((size_t)mi.uordblks >> 20));
+    }
+    // Test runs: which MB of the 1 GB RDRAM region the game has written past the console's 8 MB (how much the region
+    // could shrink).
+    if (g_script_loaded && (vi == 6000 || vi == 9000)) {
+        std::string used;
+        int run_start = -1, last = -1;
+        for (int mb = 8; mb <= 1024; mb++) {
+            bool touched = false;
+            if (mb < 1024) {
+                const uint64_t* w = reinterpret_cast<const uint64_t*>(rdram + (size_t)mb * 0x100000);
+                for (size_t i = 0; i < 0x100000 / 8; i++) if (w[i]) { touched = true; break; }
+            }
+            if (touched && run_start < 0) run_start = mb;
+            if (!touched && run_start >= 0) { used += std::to_string(run_start) + "-" + std::to_string(mb - 1) + " "; run_start = -1; }
+            if (touched) last = mb;
+        }
+        fprintf(stderr, "[mem] vi=%llu written MB past 8: %s(highest %d)\n", (unsigned long long)vi, used.c_str(), last);
+    }
     const bool online = net::state.load() == 2;
     if (g_script_loaded ? (vi < 300 || vi % 60 == 0) : (vi % 600 == 0 || (online && vi % 60 == 0))) {
         const uint64_t h = game_hash(rdram, 0, 8 * 1024 * 1024);

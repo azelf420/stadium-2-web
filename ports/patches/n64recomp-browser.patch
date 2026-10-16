@@ -1,25 +1,65 @@
 diff --git a/renderer/rt64_web_renderer.cpp b/renderer/rt64_web_renderer.cpp
-index b8d7ef1..27c0bb2 100644
+index b8d7ef1..0cad7a7 100644
 --- a/renderer/rt64_web_renderer.cpp
 +++ b/renderer/rt64_web_renderer.cpp
-@@ -8,6 +8,8 @@
+@@ -8,6 +8,9 @@
  // the cross-origin isolation headers threads need, and get its WebGPU device from plume_webgpu_device.js (--pre-js).
  
  #include "rt64_web_renderer.h"
 +#include <emscripten.h>
++#include <atomic>
 +#include <cstdio>
  
  #include "hle/rt64_application.h"
  #include "ultramodern/ultramodern.hpp"
-@@ -73,6 +75,11 @@ namespace {
+@@ -29,6 +32,19 @@ namespace {
+ 
+     void check_interrupts() {}
+ 
++    // n64-web: graphics quality, chosen on the page (globalThis.n64webQuality, or n64web_set_quality while the game
++    // runs): 0 the N64's own resolution (light: phones, weak graphics), 1 twice that, 2 the canvas's resolution in whole
++    // multiples of 240 lines. Applied on the renderer's thread at the next display list.
++    std::atomic<int> quality_request{-1};
++    void apply_quality(RT64::Application *app, int quality, bool update) {
++        app->userConfig.resolution = quality <= 0 ? RT64::UserConfiguration::Resolution::Original
++                                   : quality == 1 ? RT64::UserConfiguration::Resolution::Manual
++                                                  : RT64::UserConfiguration::Resolution::WindowIntegerScale;
++        app->userConfig.resolutionMultiplier = 2.0;
++        fprintf(stderr, "[n64web-res] graphics quality %d\n", quality);
++        if (update) app->updateUserConfig(true);
++    }
++
+     class RT64WebRenderer : public ultramodern::renderer::RendererContext {
+     public:
+         RT64WebRenderer(uint8_t *rdram, bool render_to_ram) {
+@@ -72,7 +88,11 @@ namespace {
+ 
              // The defaults of a recomp's settings: the canvas's resolution in whole multiples of 240 lines, the original
              // aspect ratio, no MSAA (WebGPU has no sample positions), and the game's own frame pacing.
-             app->userConfig.resolution = RT64::UserConfiguration::Resolution::WindowIntegerScale;
-+            // n64-web diagnostic: ?res=1 renders at the N64's own resolution (Resolution::Original).
-+            if (MAIN_THREAD_EM_ASM_INT({ return new URLSearchParams(location.search).get('res') === '1' ? 1 : 0; })) {
-+                app->userConfig.resolution = RT64::UserConfiguration::Resolution::Original;
-+                fprintf(stderr, "[n64web-res] RT64 at the original resolution\n");
-+            }
+-            app->userConfig.resolution = RT64::UserConfiguration::Resolution::WindowIntegerScale;
++            // n64-web: the page's quality (?res=1 still forces the N64's own resolution); 2 when the page sets none.
++            apply_quality(app.get(), MAIN_THREAD_EM_ASM_INT({
++                if (new URLSearchParams(location.search).get('res') === '1') return 0;
++                const q = globalThis.n64webQuality; return q === 0 || q === 1 || q === 2 ? q : 2;
++            }), false);
              app->userConfig.downsampleMultiplier = 1;
              app->userConfig.aspectRatio = RT64::UserConfiguration::AspectRatio::Original;
              app->userConfig.extAspectRatio = RT64::UserConfiguration::AspectRatio::Original;
+@@ -109,6 +129,8 @@ namespace {
+         }
+ 
+         void send_dl(const OSTask *task) override {
++            const int quality = quality_request.exchange(-1);
++            if (quality >= 0) apply_quality(app.get(), quality, true);
+             app->state->rsp->reset();
+             app->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);
+             app->processDisplayLists(app->core.RDRAM, task->t.data_ptr & 0x3FFFFFF, 0, true);
+@@ -149,6 +171,8 @@ namespace {
+     };
+ }
+ 
++extern "C" EMSCRIPTEN_KEEPALIVE void n64web_set_quality(int quality) { quality_request.store(quality); }
++
+ namespace recompweb {
+     std::unique_ptr<ultramodern::renderer::RendererContext> create_rt64_renderer(uint8_t *rdram, bool render_to_ram) {
+         return std::make_unique<RT64WebRenderer>(rdram, render_to_ram);

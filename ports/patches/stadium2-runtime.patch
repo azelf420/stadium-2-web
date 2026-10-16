@@ -611,10 +611,33 @@ index feaf220..b5ea080 100644
      // Bind every host runtime helper the CGenerator output can call. All are
      // CODE symbols (tcc_add_symbol resolves them); the lone DATA symbol,
 diff --git a/librecomp/src/recomp.cpp b/librecomp/src/recomp.cpp
-index 342dff4..dddc557 100644
+index 342dff4..3cb01d6 100644
 --- a/librecomp/src/recomp.cpp
 +++ b/librecomp/src/recomp.cpp
-@@ -98,7 +98,9 @@ bool recomp::register_game(const recomp::GameEntry& entry) {
+@@ -40,6 +40,22 @@
+ #include "librecomp/mods.hpp"
+ #include "recompiler/live_recompiler.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include <unistd.h>
++// Emscripten's mmap zeroes what it maps, writing every page: the 1 GB RDRAM region would take 1 GB of real memory,
++// though the game uses a few MB of it. WebAssembly memory nobody has written yet reads as zero and takes no memory, so
++// the region is taken past the heap's top at startup, before anything can have used (and given back) that memory.
++static uint8_t* s_web_rdram = nullptr;
++__attribute__((constructor(101))) static void recomp_web_reserve_rdram() {
++    const uintptr_t top = reinterpret_cast<uintptr_t>(sbrk(0));
++    const uintptr_t pad = (65536 - (top & 65535)) & 65535;
++    void* got = sbrk(static_cast<intptr_t>(pad + recomp::allocation_size));
++    if (got != reinterpret_cast<void*>(-1)) {
++        s_web_rdram = static_cast<uint8_t*>(got) + pad;
++    }
++}
++#endif
++
+ #ifdef _WIN32
+ #    define WIN32_LEAN_AND_MEAN
+ #    include <Windows.h>
+@@ -98,7 +114,9 @@ bool recomp::register_game(const recomp::GameEntry& entry) {
  }
  
  void recomp::mods::initialize_mods() {
@@ -624,7 +647,7 @@ index 342dff4..dddc557 100644
      std::filesystem::create_directories(config_path / mods_directory);
      std::filesystem::create_directories(config_path / mod_config_directory);
      mod_context->set_mods_config_path(config_path / "mods.json");
-@@ -110,6 +112,12 @@ void recomp::mods::register_embedded_mod(const std::string &mod_id, std::span<co
+@@ -110,6 +128,12 @@ void recomp::mods::register_embedded_mod(const std::string &mod_id, std::span<co
      mod_context->register_embedded_mod(mod_id, mod_bytes);
  }
  
@@ -637,6 +660,26 @@ index 342dff4..dddc557 100644
  void recomp::mods::scan_mods() {
      std::vector<recomp::mods::ModOpenErrorDetails> mod_open_errors;
      {
+@@ -979,6 +1003,9 @@ void recomp::start(
+             VirtualFree(rdram, 0, MEM_RELEASE);
+         }
+     }
++#elif defined(__EMSCRIPTEN__)
++    rdram = s_web_rdram;
++    alloc_failed = rdram == nullptr;
+ #else
+     rdram = (uint8_t*)mmap(NULL, allocation_size, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
+     alloc_failed = rdram == reinterpret_cast<uint8_t*>(MAP_FAILED);
+@@ -1033,6 +1060,9 @@ void recomp::start(
+ #ifdef _WIN32
+     // VirtualFree yields zero when it fails.
+     free_failed = (VirtualFree(rdram, 0, MEM_RELEASE) == 0);
++#elif defined(__EMSCRIPTEN__)
++    // Taken with sbrk at startup: it stays the page's until the page closes.
++    free_failed = false;
+ #else
+     // munmap yields -1 when it fails.
+     free_failed = (munmap(rdram, allocation_size) == -1);
 diff --git a/ultramodern/CMakeLists.txt b/ultramodern/CMakeLists.txt
 index 1278ba4..aee3eae 100644
 --- a/ultramodern/CMakeLists.txt
